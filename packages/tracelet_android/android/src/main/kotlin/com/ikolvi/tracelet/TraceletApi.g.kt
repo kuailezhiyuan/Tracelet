@@ -235,7 +235,8 @@ enum class TlMotionDetectionMode(val raw: Int) {
 
 enum class TlStationaryTrackingMode(val raw: Int) {
   PERIODIC(0),
-  GEOFENCES(1);
+  GEOFENCES(1),
+  CONTINUOUS(2);
 
   companion object {
     fun ofRaw(raw: Int): TlStationaryTrackingMode? {

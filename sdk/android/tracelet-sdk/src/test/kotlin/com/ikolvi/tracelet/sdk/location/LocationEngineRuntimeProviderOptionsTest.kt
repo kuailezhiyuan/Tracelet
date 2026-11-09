@@ -121,6 +121,40 @@ class LocationEngineRuntimeProviderOptionsTest {
     }
 
     @Test
+    fun stationaryContinuousReplacesOnlyPriorityAndRestoresItOnMovement() {
+        whenever(configManager.getStationaryPeriodicAccuracy()).thenReturn(1)
+        engine.start()
+        assertTrue(engine.updateLocationProviderOptions(null, 25.0))
+        val moving = client.requests.last()
+
+        engine.applyContinuousPace(stationary = true)
+
+        assertEquals(
+            moving.copy(priority = TraceletLocationPriority.PRIORITY_BALANCED_POWER_ACCURACY),
+            client.requests.last(),
+        )
+        assertTrue(engine.isStationaryContinuous)
+
+        engine.applyContinuousPace(stationary = false)
+
+        assertEquals(moving, client.requests.last())
+        assertFalse(engine.isStationaryContinuous)
+        assertTrue(client.callbacks.all { it === client.callbacks.first() })
+        assertEquals(0, client.removeCount)
+    }
+
+    @Test
+    fun stationaryContinuousStartsAtStationaryAccuracyWithoutIncreasingPrecision() {
+        whenever(configManager.getDesiredAccuracy()).thenReturn(2)
+        whenever(configManager.getStationaryPeriodicAccuracy()).thenReturn(1)
+
+        engine.applyContinuousPace(stationary = true)
+
+        assertEquals(TraceletLocationPriority.PRIORITY_LOW_POWER, client.requests.single().priority)
+        assertTrue(engine.isStationaryContinuous)
+    }
+
+    @Test
     fun rejectsInvalidFilterAndInactiveTracking() {
         assertFalse(engine.updateLocationProviderOptions(1, 25.0))
         assertEquals(0, client.requests.size)

@@ -670,7 +670,7 @@ class TraceletSdk private constructor(private val context: Context) {
                         return
                     }
                     val useForeground = configManager.isForegroundServiceEnabled()
-                    if (useForeground) {
+                    if (useForeground || locationEngine.keepsStationaryStream) {
                         LocationService.switchToContinuous(locationEngine, stateManager)
                     } else {
                         PeriodicLocationWorker.cancel(context)
@@ -738,6 +738,19 @@ class TraceletSdk private constructor(private val context: Context) {
                     }
                     // Dispatch motionchange event so Flutter UI updates _isMoving
                     stateManager.isMoving = false
+                    val locationMap = locationEngine.getLastLocation()?.let {
+                        locationEngine.enrichLocation(it, "motionchange")
+                    } ?: mapOf("is_moving" to false)
+                    eventSender.sendMotionChange(locationMap)
+                }
+
+                override fun switchToStationaryContinuous() {
+                    if (!locationEngine.keepsStationaryStream) return
+                    if (configManager.getMotionDetectionMode() == com.ikolvi.tracelet.sdk.model.MotionDetectionMode.SMART) {
+                        smartMotionCoordinator.onSpeedStateChange(false)
+                        return
+                    }
+                    LocationService.switchToStationaryContinuous(locationEngine, stateManager)
                     val locationMap = locationEngine.getLastLocation()?.let {
                         locationEngine.enrichLocation(it, "motionchange")
                     } ?: mapOf("is_moving" to false)
@@ -1268,7 +1281,14 @@ class TraceletSdk private constructor(private val context: Context) {
             startMotionDetector()
         }
 
-        if (stateManager.isMoving) {
+        if (locationEngine.keepsStationaryStream) {
+            if (stateManager.isMoving) {
+                locationEngine.applyContinuousPace(stationary = false)
+            } else {
+                changePace(false)
+                LocationService.switchToStationaryContinuous(locationEngine, stateManager)
+            }
+        } else if (stateManager.isMoving) {
             locationEngine.start()
         } else {
             changePace(false)

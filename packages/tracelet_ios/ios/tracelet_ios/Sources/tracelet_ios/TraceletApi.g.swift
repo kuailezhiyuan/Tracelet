@@ -201,6 +201,7 @@ enum TlMotionDetectionMode: Int {
 enum TlStationaryTrackingMode: Int {
   case periodic = 0
   case geofences = 1
+  case continuous = 2
 }
 
 enum TlGeofenceAction: Int {

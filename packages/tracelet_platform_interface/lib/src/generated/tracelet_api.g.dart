@@ -117,7 +117,7 @@ enum TlTrackingMode { location, geofences, periodic }
 
 enum TlMotionDetectionMode { accelerometer, speed, smart }
 
-enum TlStationaryTrackingMode { periodic, geofences }
+enum TlStationaryTrackingMode { periodic, geofences, continuous }
 
 enum TlGeofenceAction { enter, exit, dwell }
 
