@@ -463,7 +463,7 @@ class LocationService : Service(), DefaultLifecycleObserver {
         }
 
         internal fun switchToStationaryContinuous(engine: LocationEngine, state: StateManager) {
-            if (!engine.keepsStationaryStream) return
+            if (!state.enabled || !engine.keepsStationaryStream) return
             stopStationaryTimer()
             state.isMoving = false
             state.trackingMode = TrackingMode.CONTINUOUS
@@ -551,6 +551,7 @@ class LocationService : Service(), DefaultLifecycleObserver {
         }
 
         fun switchToContinuous(engine: com.ikolvi.tracelet.sdk.location.LocationEngine, state: StateManager) {
+            if (engine.keepsStationaryStream && !state.enabled) return
             stopStationaryTimer()
             // Mark state as moving so motion change events fire correctly
             state.isMoving = true

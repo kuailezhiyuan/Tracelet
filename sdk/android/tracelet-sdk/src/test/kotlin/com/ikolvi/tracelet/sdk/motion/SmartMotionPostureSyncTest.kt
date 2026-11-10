@@ -28,7 +28,7 @@ import com.ikolvi.tracelet.sdk.wrapper.TraceletServicesProvider
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertSame
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -399,7 +399,8 @@ class SmartMotionPostureSyncTest {
         assertEquals(uniffi.tracelet_core.CoordinatorAction.SWITCH_TO_CONTINUOUS, action)
         assertFalse(engine.isStationaryContinuous)
         assertTrue(engine.isTracking)
-        assertSame(callback, client.callback)
+        assertTrue(client.callback != null)
+        assertNotSame(callback, client.callback)
     }
 
     /**
@@ -481,7 +482,9 @@ private class PostureLocationClient : TraceletLocationClient {
         looper: Looper,
     ) { this.callback = callback }
 
-    override fun removeLocationUpdates(callback: TraceletLocationCallback) { this.callback = null }
+    override fun removeLocationUpdates(callback: TraceletLocationCallback) {
+        if (this.callback === callback) this.callback = null
+    }
 
     override fun getCurrentLocation(
         priority: Int,
