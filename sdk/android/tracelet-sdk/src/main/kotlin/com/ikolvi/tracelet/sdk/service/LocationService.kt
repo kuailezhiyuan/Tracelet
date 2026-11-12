@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.hardware.Sensor
+import android.hardware.SensorManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -29,6 +31,7 @@ import com.ikolvi.tracelet.sdk.geofence.GeofenceManager
 import com.ikolvi.tracelet.sdk.location.LocationEngine
 import com.ikolvi.tracelet.sdk.location.PeriodicLocationWorker
 import com.ikolvi.tracelet.sdk.receiver.GeofenceBroadcastReceiver
+import com.ikolvi.tracelet.sdk.model.MotionDetectionMode
 import com.ikolvi.tracelet.sdk.model.StationaryTrackingMode
 import com.ikolvi.tracelet.sdk.model.TrackingMode
 import com.ikolvi.tracelet.sdk.util.BackgroundRestrictions
@@ -125,6 +128,9 @@ class LocationService : Service(), DefaultLifecycleObserver {
 
         @Volatile
         private var isRunning = false
+
+        @Volatile
+        private var activeService: LocationService? = null
 
         // ── Foreground-service health (#255) ──
         // Authoritative native foreground-service state, so Dart can distinguish
@@ -440,6 +446,7 @@ class LocationService : Service(), DefaultLifecycleObserver {
             // Fire first fix after one interval.
             handler.postDelayed(runnable, intervalMs)
             TraceletLog.debug("switchToStationaryPeriodic() — interval=${intervalMs}ms, accuracy=$accuracy")
+            updateWakelock()
         }
 
         /**
@@ -460,6 +467,7 @@ class LocationService : Service(), DefaultLifecycleObserver {
             state.isMoving = false
             state.trackingMode = com.ikolvi.tracelet.sdk.model.TrackingMode.GEOFENCES
             TraceletLog.debug("switchToStationaryGeofences() — continuous stopped, geofences active")
+            updateWakelock()
         }
 
         internal fun switchToStationaryContinuous(engine: LocationEngine, state: StateManager) {
@@ -468,6 +476,7 @@ class LocationService : Service(), DefaultLifecycleObserver {
             state.isMoving = false
             state.trackingMode = TrackingMode.CONTINUOUS
             engine.applyContinuousPace(stationary = true)
+            updateWakelock()
         }
 
         /**
@@ -567,6 +576,7 @@ class LocationService : Service(), DefaultLifecycleObserver {
             TraceletLog.lifecycle(
                 "boot-tracking: switching to CONTINUOUS — the pace is now moving"
             )
+            updateWakelock()
         }
 
         /**
@@ -762,6 +772,16 @@ class LocationService : Service(), DefaultLifecycleObserver {
             context.startService(intent)
         }
 
+        internal fun updateWakelock() {
+            val service = activeService ?: return
+            // Use the live service so a queued pace change cannot resurrect a stopped one.
+            if (!service.wakelockHandler.post {
+                if (activeService === service && isRunning) service.applyWakelockPolicy()
+            }) {
+                TraceletLog.warning("Could not schedule the location wakelock update")
+            }
+        }
+
         /**
          * Stops and releases the boot-mode LocationEngine.
          *
@@ -818,6 +838,7 @@ class LocationService : Service(), DefaultLifecycleObserver {
     override fun onCreate() {
         super<Service>.onCreate()
         configManager = ConfigManager.getInstance(applicationContext)
+        activeService = this
 
         // #318: wire the persistent logger before anything else runs here.
         // Touching `.logger` is what calls TraceletLog.attach(), and on a cold
@@ -957,6 +978,8 @@ class LocationService : Service(), DefaultLifecycleObserver {
                 val isBootStart = intent.getBooleanExtra(EXTRA_BOOT_START, false)
                 if (isBootStart) {
                     startBootTracking()
+                } else {
+                    applyWakelockPolicy()
                 }
             }
             ACTION_STOP -> {
@@ -1098,6 +1121,7 @@ class LocationService : Service(), DefaultLifecycleObserver {
     }
 
     override fun onDestroy() {
+        if (activeService === this) activeService = null
         // #318/#324: the pair to "service: onCreate", and at debug it was dropped at
         // every default log level. `stopRequested` is the finding: every path
         // that stands the service down deliberately clears `isRunning` first, so
@@ -1121,14 +1145,28 @@ class LocationService : Service(), DefaultLifecycleObserver {
     // OEM wakelock management
     // =========================================================================
 
-    /**
-     * Acquires an OEM-safe partial wakelock.
-     *
-     * On Huawei EMUI 9+, uses the "LocationManagerService" tag to bypass
-     * PowerGenie process killing. On other devices, uses a standard tag.
-     * The wakelock is held for the lifetime of the service to prevent
-     * aggressive OEM power managers from suspending our process.
-     */
+    private fun applyWakelockPolicy() {
+        val state = StateManager(applicationContext)
+        if (!isRunning || !state.enabled || !configManager.isForegroundServiceEnabled()) return
+
+        val isMoving = state.isMoving
+        val release = !isMoving &&
+            configManager.getMotionDetectionMode() == MotionDetectionMode.SMART &&
+            configManager.getReleaseWakelockWhenStationary() &&
+            (getSystemService(Context.SENSOR_SERVICE) as? SensorManager)
+                ?.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION) != null
+        val wasHeld = wakeLock?.isHeld == true
+        if (release) releaseOemWakelock() else acquireOemWakelock()
+        val isHeld = wakeLock?.isHeld == true
+        if (wasHeld != isHeld) {
+            TraceletLog.lifecycle(
+                "wakelock: ${if (isHeld) "acquired" else "released"} — " +
+                    "isMoving=$isMoving stationaryMode=${configManager.getStationaryTrackingMode()}"
+            )
+        }
+    }
+
+    /** Acquires the OEM-safe lock until tracking stops or stationary release is allowed. */
     private fun acquireOemWakelock() {
         if (wakeLock?.isHeld != true) {
             wakeLock = OemCompat.acquireOemSafeWakelock(applicationContext, WAKELOCK_TIMEOUT_MS)
@@ -1199,7 +1237,10 @@ class LocationService : Service(), DefaultLifecycleObserver {
      * previously registered.
      */
     private fun startBootTracking() {
-        if (bootLocationEngine != null) return // Already tracking
+        if (bootLocationEngine != null) {
+            applyWakelockPolicy()
+            return
+        }
 
         val ctx = applicationContext
 
@@ -1327,6 +1368,7 @@ class LocationService : Service(), DefaultLifecycleObserver {
                     "separate fix caches, and a stationary switch stops only the one " +
                     "its own coordinator holds (#410)."
             )
+            applyWakelockPolicy()
             return
         }
 
@@ -1737,6 +1779,7 @@ class LocationService : Service(), DefaultLifecycleObserver {
                 stopSelf()
                 isRunning = false
             }
+            applyWakelockPolicy()
         }
 
     /**

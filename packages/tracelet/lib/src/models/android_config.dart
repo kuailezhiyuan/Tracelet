@@ -213,6 +213,8 @@ class AndroidConfig {
 
   /// Drops the OEM Wakelock when the device enters a fully stationary state.
   /// Only applies when using `MotionDetectionMode.smart`.
+  /// Requires a hardware significant-motion wake-up sensor. Applies to all
+  /// stationary strategies, including `StationaryTrackingMode.continuous`.
   /// Resolves Issue #162.
   /// Defaults to `false`.
   bool get releaseWakelockWhenStationary =>
