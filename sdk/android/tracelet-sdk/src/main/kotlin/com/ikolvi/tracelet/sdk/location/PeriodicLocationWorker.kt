@@ -213,9 +213,9 @@ class PeriodicLocationWorker(
                 dispatchLocation(locationMap)
                 TraceletLog.debug("Periodic fix: lat=${location.latitude}, lng=${location.longitude}, speed=$effectiveSpeed")
 
-                // Feed speed to motion coordinators to allow wake up from stationary
+                // Serialized speed may be derived; periodic fixes must use the live motion gate too.
                 if (sdk.isReady) {
-                    sdk.locationEngine.speedMotionSpeedSink?.invoke(effectiveSpeed)
+                    sdk.locationEngine.feedSpeedMotion(location)
                 }
             }
 

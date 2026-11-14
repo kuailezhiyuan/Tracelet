@@ -320,6 +320,8 @@ class TraceletHostApiImpl(
             put("stationaryPeriodicInterval", c.motion.stationaryPeriodicInterval)
             put("stationaryPeriodicAccuracy", c.motion.stationaryPeriodicAccuracy?.raw)
             put("speedWakeConfirmCount", c.motion.speedWakeConfirmCount)
+            // Leave an omitted partial-update value unresolved at the bridge.
+            put("enableGpsTremorOverride", c.motion.enableGpsTremorOverride)
         })
         put("geofence", buildMap {
             put("geofenceInitialTriggerEntry", c.geofence.geofenceInitialTriggerEntry)

@@ -3,31 +3,9 @@ import XCTest
 
 @testable import TraceletSDK
 
-/// Regression for GitHub issue #404:
-///   "a stale near-zero speed can veto an accelerometer wake, so a backgrounded
-///    device may never leave stationary mode"
-///
-/// `TraceletSmartMotionCoordinator`'s hand-tremor override reads
-/// `LocationEngine.lastEffectiveSpeed` to decide whether a *moving*
-/// accelerometer is really hand tremor on a still device. It had no freshness
-/// check, while the pace sink next door has enforced `maximumPaceFixAge` since
-/// 3.8.7 — so the two disagreed about a reading neither could vouch for.
-///
-/// The failure needs no exotic state. A device parks, the stream stops, and
-/// `lastEffectiveSpeed` freezes at whatever it last resolved (0.0057 m/s in the
-/// reported trace, well under the 0.15 m/s tremor cutoff). Stationary-periodic
-/// mode then produces no fresh fix **by construction**, so minutes later, when
-/// the accelerometer fires on a genuine walk, the override reads that frozen
-/// value and overrules the wake. Reopening the app calls `ready()`, which
-/// produces a fresh fix and unwedges it — which is exactly why this was
-/// reported as "the location indicator only appears in the foreground".
-///
-/// These tests pin `paceFixAge`, the seam the gate reads. The coordinator's own
-/// decision is covered on Android (`SmartMotionCoordinatorTest`), where the
-/// engine is a mock: this target cannot drive one, because `resolvedSpeed`
-/// reaches the engine through `TraceletSdk.shared` and starting a session here
-/// trips `setAllowsBackgroundLocationUpdates` on a bundle with no `location`
-/// background mode.
+/// Motion evidence must not inherit stale speeds or position jitter from the
+/// accepted-location cache. Tests feed raw fixes without starting background
+/// tracking, which the SwiftPM test bundle is not entitled to run.
 final class PaceFixAgeTests: XCTestCase {
 
     private func makeEngine() -> (LocationEngine, PaceAgeLocationManager) {
@@ -62,6 +40,71 @@ final class PaceFixAgeTests: XCTestCase {
             verticalAccuracy: 5,
             timestamp: timestamp
         )
+    }
+
+    private func speedFix(_ speed: Double, metres: Double = 0, age: TimeInterval = 0, accuracy: Double = 5, uncertainty: Double = 0.07) -> CLLocation {
+        CLLocation(coordinate: CLLocationCoordinate2D(latitude: 36.7 + metres / 111_320, longitude: 117.1),
+            altitude: 0, horizontalAccuracy: accuracy, verticalAccuracy: 5,
+            course: -1, courseAccuracy: -1, speed: speed, speedAccuracy: uncertainty,
+            timestamp: Date(timeIntervalSinceNow: -age))
+    }
+
+    func testPlatformZeroIsNotReplacedByADriftingPosition() {
+        let (engine, _) = makeEngine()
+        var speeds: [Double] = []
+        engine.speedSink = { speeds.append($0) }
+        engine.feedSpeedMotion(speedFix(0, age: 1))
+        engine.feedSpeedMotion(speedFix(0, metres: 54))
+        XCTAssertEqual(speeds, [0, 0])
+    }
+
+    func testMillisecondPositionDifferencesDoNotProvideMotionSpeed() {
+        for dt in [0.002, 0.008, 0.068] {
+            let (engine, _) = makeEngine()
+            var speed = 0.0
+            engine.speedSink = { speed = $0 }
+            engine.feedSpeedMotion(speedFix(-1, age: dt))
+            engine.feedSpeedMotion(speedFix(-1, metres: 44))
+            XCTAssertLessThan(speed, 0)
+            XCTAssertEqual(engine.getMotionSpeedDiagnostics()["motionSpeedReason"] as? String, "short_interval")
+        }
+    }
+
+    func testPositionDriftWithinAccuracyIsUnknownRatherThanHighSpeed() {
+        let (engine, _) = makeEngine()
+        var speed = 0.0
+        engine.speedSink = { speed = $0 }
+        engine.feedSpeedMotion(speedFix(-1, age: 1, accuracy: 95))
+        engine.feedSpeedMotion(speedFix(-1, metres: 19.2, accuracy: 90))
+        XCTAssertLessThan(speed, 0)
+        XCTAssertEqual(engine.getMotionSpeedDiagnostics()["motionSpeedReason"] as? String, "within_position_error")
+    }
+
+    func testCrediblePositionDeltaCanStillDetectAVehicleWithoutPlatformSpeed() {
+        let (engine, _) = makeEngine()
+        var speed = 0.0
+        engine.speedSink = { speed = $0 }
+        engine.feedSpeedMotion(speedFix(-1, age: 5))
+        engine.feedSpeedMotion(speedFix(-1, metres: 100))
+        XCTAssertEqual(speed, 18, accuracy: 0.1)
+    }
+
+    func testUncertainSpeedInsideTheHysteresisBandIsUnknown() {
+        let (engine, _) = makeEngine()
+        engine.feedSpeedMotion(speedFix(0.7, uncertainty: 10))
+        XCTAssertEqual(engine.getMotionSpeedDiagnostics()["motionSpeedReason"] as? String, "speed_uncertainty")
+        XCTAssertNil(engine.getMotionSpeedDiagnostics()["motionSpeedMps"] as? Double)
+    }
+
+    func testRepeatedAndOutOfOrderFixesCannotCountAsWakeConfirmations() {
+        let (engine, _) = makeEngine()
+        var speeds: [Double] = []
+        engine.speedSink = { speeds.append($0) }
+        let location = speedFix(3)
+        engine.feedSpeedMotion(location)
+        engine.feedSpeedMotion(location)
+        engine.feedSpeedMotion(speedFix(3, age: 1))
+        XCTAssertEqual(speeds, [3])
     }
 
     /// Nothing accepted yet is *unknown*, and must stay distinguishable from a

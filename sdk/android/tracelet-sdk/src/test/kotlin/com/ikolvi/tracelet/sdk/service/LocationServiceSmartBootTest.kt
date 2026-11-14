@@ -76,9 +76,8 @@ class LocationServiceSmartBootTest {
         LocationService.bootLocationEngine?.destroy()
         LocationService.bootLocationEngine = null
         LocationService.bootMotionDetector = null
-        try {
-            serviceController.destroy()
-        } catch (e: Exception) {}
+        // Surface teardown failures instead of hiding a leaking service behind a passing test.
+        serviceController.destroy()
     }
 
     @Test
@@ -118,6 +117,30 @@ class LocationServiceSmartBootTest {
         assertFalse(state.isMoving)
         assertEquals(TrackingMode.CONTINUOUS, state.trackingMode)
         assertFalse(LocationService.isStationaryTimerActive())
+    }
+
+    @Test
+    fun `smart native takeover keeps speed moving when accelerometer settles`() {
+        config.setConfig(mapOf(
+            "enableGpsTremorOverride" to false,
+            "stationaryTrackingMode" to StationaryTrackingMode.CONTINUOUS.value,
+        ))
+        state.isMoving = true
+        state.speedMotionState = SpeedMotionState.MOVING
+        val intent = android.content.Intent(context, LocationService::class.java).apply {
+            action = LocationService.ACTION_START
+            putExtra("boot_start", true)
+        }
+        serviceController.create().withIntent(intent).startCommand(0, 1)
+
+        assertNotNull(LocationService.bootMotionDetector).onMotionStateChanged?.invoke(false)
+
+        val coordinator = assertNotNull(LocationService.bootSmartMotionCoordinator)
+        assertFalse(coordinator.isAccelMoving)
+        assertTrue(coordinator.isSpeedMoving)
+        assertEquals("moving", assertNotNull(LocationService.bootSpeedMotionManager).getCurrentState())
+        assertTrue(state.isMoving)
+        assertFalse(assertNotNull(LocationService.bootLocationEngine).isStationaryContinuous)
     }
 
     @Test

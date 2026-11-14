@@ -67,6 +67,61 @@ class SpeedMotionManagerTest {
         manager.start()
     }
 
+    @Test
+    fun `smart speed countdown does not overwrite the combined moving state`() {
+        configure(stationaryDelaySeconds = 1)
+        config.setConfig(mapOf("motionDetectionMode" to 2))
+        state.isMoving = true
+
+        manager.onLocation(0.0)
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1))
+
+        assertEquals("stationary", manager.getCurrentState())
+        assertTrue(state.isMoving, "only the Smart coordinator owns the combined pace")
+    }
+
+    @Test
+    fun `default moving threshold wakes and holds high at low vehicle speed`() {
+        state.speedMotionState = com.ikolvi.tracelet.sdk.model.SpeedMotionState.STATIONARY
+        configure(movingThreshold = 0.9, wakeConfirmCount = 3)
+        repeat(2) { manager.onLocation(1.2) }
+        assertEquals("stationary", manager.getCurrentState())
+        manager.onLocation(1.2)
+        assertEquals("moving", manager.getCurrentState())
+        repeat(10) { manager.onLocation(1.2) }
+        assertEquals("moving", manager.getCurrentState())
+    }
+
+    @Test
+    fun `restored partial wake confirmation does not count old fixes`() {
+        state.speedMotionState = com.ikolvi.tracelet.sdk.model.SpeedMotionState.STATIONARY
+        state.speedWakeCount = 2
+        configure(wakeConfirmCount = 3)
+        manager.onLocation(3.0)
+        manager.onLocation(3.0)
+        assertEquals("stationary", manager.getCurrentState())
+        manager.onLocation(3.0)
+        assertEquals("moving", manager.getCurrentState())
+    }
+
+    @Test
+    fun `unknown speed reuses slowing timer and cannot keep resetting it`() {
+        configure(stationaryDelaySeconds = 4, wakeConfirmCount = 3)
+        manager.onLocation(-1.0)
+        assertEquals("slowing", manager.getCurrentState())
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(2))
+        manager.onLocation(Double.NaN)
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(2))
+        assertEquals("stationary", manager.getCurrentState())
+        manager.onLocation(2.0)
+        manager.onLocation(-1.0)
+        manager.onLocation(2.0)
+        manager.onLocation(2.0)
+        assertEquals("stationary", manager.getCurrentState())
+        manager.onLocation(2.0)
+        assertEquals("moving", manager.getCurrentState())
+    }
+
     // =========================================================================
     // Default state
     // =========================================================================

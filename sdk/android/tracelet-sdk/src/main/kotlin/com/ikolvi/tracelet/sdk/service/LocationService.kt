@@ -360,11 +360,6 @@ class LocationService : Service(), DefaultLifecycleObserver {
             val handler = Handler(Looper.getMainLooper())
             stationaryTimerHandler = handler
 
-            val lastLoc = engine.getLastLocation()
-            var lastLat = lastLoc?.latitude ?: Double.NaN
-            var lastLng = lastLoc?.longitude ?: Double.NaN
-            var lastTime = lastLoc?.time ?: 0L
-
             val runnable = object : Runnable {
                 override fun run() {
                     if (!state.enabled) {
@@ -377,37 +372,14 @@ class LocationService : Service(), DefaultLifecycleObserver {
                     // itself below. Letting getCurrentPosition() persist too stored the
                     // same map (same uuid) first, so the insert below failed every tick
                     // with "UNIQUE constraint failed: location_events.uuid" (#248).
+                    // getCurrentPosition already votes on the raw fix; dispatch must not vote a second time.
                     engine.getCurrentPosition(mapOf("desiredAccuracy" to accuracy, "skipCache" to true, "persist" to false)) { locationMap ->
                         if (locationMap != null) {
                             val coords = locationMap["coords"] as? Map<*, *>
-                            var speed = (coords?.get("speed") as? Number)?.toDouble() ?: 0.0
                             val lat = (coords?.get("latitude") as? Number)?.toDouble()
                             val lng = (coords?.get("longitude") as? Number)?.toDouble()
                             
-                            val now = System.currentTimeMillis()
-                            
-                            // If platform speed is 0 or missing, calculate from distance
-                            if (speed <= 0.0 && lat != null && lng != null && !lastLat.isNaN() && !lastLng.isNaN()) {
-                                val results = FloatArray(1)
-                                android.location.Location.distanceBetween(lastLat, lastLng, lat, lng, results)
-                                val distance = results[0].toDouble()
-                                val timeDelta = (now - lastTime) / 1000.0
-                                if (timeDelta > 0) {
-                                    speed = distance / timeDelta
-                                }
-                                
-                                val stationaryRadius = config.getStationaryRadius()
-                                val movingThreshold = config.getSpeedMovingThreshold()
-                                if (distance >= stationaryRadius && speed < movingThreshold) {
-                                    speed = movingThreshold + 0.1
-                                }
-                            }
-                            
                             if (lat != null && lng != null) {
-                                lastLat = lat
-                                lastLng = lng
-                                lastTime = now
-                                
                                 // Update odometer if accuracy is acceptable
                                 val accuracy = (coords?.get("accuracy") as? Number)?.toDouble() ?: 0.0
                                 val lastPeriodicLat = state.lastPeriodicLatitude
@@ -435,7 +407,6 @@ class LocationService : Service(), DefaultLifecycleObserver {
                             
                             engine.events?.sendLocation(enriched)
                             
-                            engine.speedMotionSpeedSink?.invoke(speed)
                         }
                     }
                     handler.postDelayed(this, intervalMs)
@@ -1583,18 +1554,19 @@ class LocationService : Service(), DefaultLifecycleObserver {
                             "motion (killed-state, smart): isMoving=$isMoving"
                         )
 
-                        // Call coordinator first so it can switch the engine state (e.g. engine.start())
-                        // This prevents engine.start() from overwriting forcePersistNextFilteredLocation to false.
-                        bootSpeedMotionManager?.onManualPaceChange(isMoving)
                         val action = coordinator.onAccelStateChange(isMoving)
+                        // A still accelerometer must not reset the independent speed input in a moving car.
+                        if (action == uniffi.tracelet_core.CoordinatorAction.SWITCH_TO_CONTINUOUS) {
+                            bootSpeedMotionManager?.onManualPaceChange(true)
+                        }
                         TraceletLog.debug("Boot SMART: coordinator accelAction=$action, isAccelMoving=${coordinator.isAccelMoving}, isSpeedMoving=${coordinator.isSpeedMoving}")
                         
-                        // Fire event to Dart / headless so UI and listeners know about the pace change
+                        // Report the combined pace: a stationary sensor can coexist with vehicle speed.
                         val locMap = engine.getLastLocation()?.let { 
                             engine.enrichLocation(it, "motionchange").toMutableMap().apply { 
-                                put("is_moving", isMoving) 
+                                put("is_moving", state.isMoving)
                             } 
-                        } ?: mutableMapOf<String, Any?>("is_moving" to isMoving)
+                        } ?: mutableMapOf<String, Any?>("is_moving" to state.isMoving)
                         eventSender.sendMotionChange(locMap)
                         
                         // Force persist the location to ensure the server receives the pace change event

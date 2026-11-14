@@ -59,10 +59,12 @@ class SmartMotionCoordinatorTest {
      * that means "GPS says near-zero *now*" has to say when.
      */
     private fun resolveSpeed(speed: Double, ageMs: Long = 0L) {
-        org.mockito.Mockito.`when`(locationEngine.getLastLocation())
-            .thenReturn(android.location.Location("test"))
-        org.mockito.Mockito.`when`(locationEngine.lastEffectiveSpeed).thenReturn(speed)
-        org.mockito.Mockito.`when`(locationEngine.paceFixAgeMs).thenReturn(ageMs)
+        val location = android.location.Location("gps").apply {
+            accuracy = 5f
+            elapsedRealtimeNanos = android.os.SystemClock.elapsedRealtimeNanos() - ageMs * 1_000_000
+        }
+        org.mockito.Mockito.`when`(locationEngine.lastPaceSample)
+            .thenReturn(LocationEngine.PaceSample(location, speed))
     }
 
     @Test
@@ -122,6 +124,72 @@ class SmartMotionCoordinatorTest {
         // GPS speed takes priority: should switch to STATIONARY because the
         // speed failsafe overrides accel jitter when GPS confirms stationary.
         assertFalse(state.isMoving)
+    }
+
+    @Test
+    fun `disabled tremor override preserves both inputs until accel settles`() {
+        config.setConfig(mapOf("motion" to mapOf("enableGpsTremorOverride" to false)))
+        resolveSpeed(0.0)
+        coordinator.onAccelStateChange(true)
+
+        coordinator.onSpeedStateChange(false)
+        coordinator.onSpeedStateChange(false)
+
+        assertTrue(coordinator.isAccelMoving)
+        assertFalse(coordinator.isSpeedMoving)
+        assertTrue(state.isMoving)
+        verify(locationEngine, never()).stop()
+
+        coordinator.onAccelStateChange(false)
+
+        assertFalse(state.isMoving)
+        verify(locationEngine).stop()
+    }
+
+    @Test
+    fun `tremor override can be enabled again on the same coordinator`() {
+        config.setConfig(mapOf("enableGpsTremorOverride" to false))
+        resolveSpeed(0.0)
+        coordinator.onAccelStateChange(true)
+        coordinator.onSpeedStateChange(false)
+        assertTrue(state.isMoving)
+
+        config.setConfig(mapOf("enableGpsTremorOverride" to true))
+        coordinator.onSpeedStateChange(false)
+
+        assertFalse(state.isMoving)
+    }
+
+    @Test
+    fun `a poor current fix cannot borrow a previous accepted near zero speed`() {
+        resolveSpeed(0.0)
+        org.mockito.Mockito.`when`(locationEngine.lastPaceSample).thenReturn(
+            LocationEngine.PaceSample(android.location.Location("network").apply {
+                accuracy = 550f
+                elapsedRealtimeNanos = android.os.SystemClock.elapsedRealtimeNanos()
+            }, 0.0),
+        )
+        coordinator.onAccelStateChange(true)
+        coordinator.onSpeedStateChange(false)
+
+        assertTrue(coordinator.isAccelMoving)
+        assertTrue(state.isMoving)
+    }
+
+    @Test
+    fun `a rejected teleport with a zero fallback cannot overrule motion`() {
+        val location = android.location.Location("gps").apply {
+            accuracy = 5f
+            elapsedRealtimeNanos = android.os.SystemClock.elapsedRealtimeNanos()
+        }
+        org.mockito.Mockito.`when`(locationEngine.lastPaceSample)
+            .thenReturn(LocationEngine.PaceSample(location, 0.0, "SPEED_FILTER"))
+        coordinator.onAccelStateChange(true)
+
+        coordinator.onSpeedStateChange(false)
+
+        assertTrue(coordinator.isAccelMoving)
+        assertTrue(state.isMoving)
     }
 
     @Test
@@ -241,10 +309,12 @@ class SmartMotionCoordinatorAccelSeedTest {
      * that means "GPS says near-zero *now*" has to say when.
      */
     private fun resolveSpeed(speed: Double, ageMs: Long = 0L) {
-        org.mockito.Mockito.`when`(locationEngine.getLastLocation())
-            .thenReturn(android.location.Location("test"))
-        org.mockito.Mockito.`when`(locationEngine.lastEffectiveSpeed).thenReturn(speed)
-        org.mockito.Mockito.`when`(locationEngine.paceFixAgeMs).thenReturn(ageMs)
+        val location = android.location.Location("gps").apply {
+            accuracy = 5f
+            elapsedRealtimeNanos = android.os.SystemClock.elapsedRealtimeNanos() - ageMs * 1_000_000
+        }
+        org.mockito.Mockito.`when`(locationEngine.lastPaceSample)
+            .thenReturn(LocationEngine.PaceSample(location, speed))
     }
 
     @Test

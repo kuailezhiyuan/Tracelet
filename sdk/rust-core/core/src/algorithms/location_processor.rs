@@ -215,7 +215,12 @@ impl LocationProcessorResult {
     /// Applied once at the exit of `process()` rather than threaded through
     /// each constructor, so a new rejection path cannot forget it and report a
     /// fix that looks like it was measured against a zero gate.
-    fn with_context(mut self, effective_distance_filter: f64, anchor_age_seconds: f64, accuracy: f64) -> Self {
+    fn with_context(
+        mut self,
+        effective_distance_filter: f64,
+        anchor_age_seconds: f64,
+        accuracy: f64,
+    ) -> Self {
         self.effective_distance_filter = effective_distance_filter;
         self.anchor_age_seconds = anchor_age_seconds;
         self.accuracy = accuracy;
@@ -620,12 +625,19 @@ impl LocationProcessor {
             time_delta = (timestamp_ms - state.last_timestamp_ms) as f64 / 1000.0;
         }
 
-        let computed_speed = if distance > 0.0 && time_delta > 0.0 {
+        // Cached fixes milliseconds apart cannot provide a stable position-derived speed.
+        let computed_speed = if distance > 0.0 && time_delta >= 0.5 {
             distance / time_delta
         } else {
             0.0
         };
-        let effective_speed = if speed > 0.0 { speed } else { computed_speed };
+        // Zero is a measured speed; only an invalid reading permits a position fallback.
+        let has_reported_speed = speed.is_finite() && speed >= 0.0;
+        let effective_speed = if has_reported_speed {
+            speed
+        } else {
+            computed_speed
+        };
 
         let mut effective_distance = tuning.distance_filter;
         if self.enable_adaptive_mode {
@@ -710,7 +722,11 @@ impl LocationProcessor {
                             "ACCURACY_FILTER",
                             effective_speed,
                         )
-                        .with_context(effective_distance, time_delta, accuracy);
+                        .with_context(
+                            effective_distance,
+                            time_delta,
+                            accuracy,
+                        );
                     }
                 }
             }
@@ -754,7 +770,7 @@ impl LocationProcessor {
                         // The platform's own reading is unaffected by the
                         // teleport, so pass it when there is one and 0.0 when
                         // there is not (#332).
-                        let reported_speed = if speed > 0.0 { speed } else { 0.0 };
+                        let reported_speed = if has_reported_speed { speed } else { 0.0 };
                         return if self.filter_policy == 2 {
                             LocationProcessorResult::error(
                                 "SPEED_FILTER",
@@ -767,7 +783,11 @@ impl LocationProcessor {
                         } else {
                             LocationProcessorResult::filtered("SPEED_FILTER", reported_speed)
                         }
-                        .with_context(effective_distance, time_delta, accuracy);
+                        .with_context(
+                            effective_distance,
+                            time_delta,
+                            accuracy,
+                        );
                     }
                 }
             }
@@ -835,7 +855,7 @@ impl LocationProcessor {
         // real Doppler reading still counts: it is a property of the fix, not of
         // the interval.
         let reported_speed = if anchor_reseeded {
-            if speed > 0.0 {
+            if has_reported_speed {
                 speed
             } else {
                 0.0
@@ -967,13 +987,18 @@ mod tests {
         }
     }
 
-    /// A fix `metres` north of the base point.
-    fn fix_at(p: &LocationProcessor, metres: f64, accuracy: f64, ts_ms: i64) -> LocationProcessorResult {
+    /// A fix `metres` north of the base point, without a platform speed.
+    fn fix_at(
+        p: &LocationProcessor,
+        metres: f64,
+        accuracy: f64,
+        ts_ms: i64,
+    ) -> LocationProcessorResult {
         p.process(
             BASE_LAT + metres / M_PER_DEG_LAT,
             BASE_LNG,
             accuracy,
-            0.0,
+            -1.0,
             ts_ms,
             false,
             None,
@@ -1012,6 +1037,7 @@ mod tests {
         }
     }
 
+    // No platform speed: the context must not turn its default zero into a measurement.
     fn fix_with_context(
         p: &LocationProcessor,
         metres: f64,
@@ -1023,7 +1049,7 @@ mod tests {
             BASE_LAT + metres / M_PER_DEG_LAT,
             BASE_LNG,
             accuracy,
-            0.0,
+            -1.0,
             ts_ms,
             false,
             Some(ctx),
@@ -1041,13 +1067,7 @@ mod tests {
         // Walking at ~1 m/s. Every one of these is inside the 750 m gate.
         let mut last = LocationProcessorResult::filtered("", 0.0);
         for step in 1..=59 {
-            last = fix_with_context(
-                &p,
-                step as f64,
-                5.0,
-                step * 1_000,
-                still_context(),
-            );
+            last = fix_with_context(&p, step as f64, 5.0, step * 1_000, still_context());
             assert!(
                 !last.accepted,
                 "fix at {step} s should still be thinned by adaptive sampling"
@@ -1657,7 +1677,7 @@ mod tests {
         // A 5 km jump in one second: ~5000 m/s implied, far past the 60 m/s cap.
         // With no platform speed to fall back on, `effective_speed` *is* the
         // absurd derived value, which must not travel onward.
-        let r = fix_at_speed(&p, 5_000.0, 5.0, 0.0, 2_000);
+        let r = fix_at_speed(&p, 5_000.0, 5.0, -1.0, 2_000);
 
         assert!(!r.accepted);
         assert_eq!(r.reason.as_deref(), Some("SPEED_FILTER"));
@@ -1676,5 +1696,97 @@ mod tests {
         assert!(!r.accepted);
         assert_eq!(r.reason.as_deref(), Some("SPEED_FILTER"));
         assert_eq!(r.effective_speed, 12.0);
+    }
+
+    #[test]
+    fn a_reported_zero_is_preserved_on_accepted_and_accuracy_filtered_fixes() {
+        for accuracy in [5.0, 150.0] {
+            let p = processor(LocationTuning {
+                distance_filter: 0.0,
+                max_implied_speed: 0,
+                ..vehicle()
+            });
+            assert!(fix_at_speed(&p, 0.0, 5.0, 0.0, 1_000).accepted);
+
+            let r = fix_at_speed(&p, 54.0, accuracy, 0.0, 2_000);
+
+            assert_eq!(r.accepted, accuracy <= 50.0);
+            assert_eq!(
+                r.effective_speed, 0.0,
+                "position drift must not replace a measured zero",
+            );
+        }
+    }
+
+    #[test]
+    fn only_negative_or_non_finite_speeds_use_the_position_fallback() {
+        for speed in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let p = processor(LocationTuning {
+                distance_filter: 0.0,
+                max_implied_speed: 0,
+                ..vehicle()
+            });
+            assert!(fix_at_speed(&p, 0.0, 5.0, 0.0, 1_000).accepted);
+
+            let r = fix_at_speed(&p, 20.0, 5.0, speed, 2_000);
+
+            assert!(r.accepted);
+            assert!(
+                (r.effective_speed - 20.0).abs() < 0.1,
+                "invalid speed {speed} did not use the fallback",
+            );
+        }
+    }
+
+    #[test]
+    fn sub_half_second_intervals_never_produce_a_position_speed() {
+        for interval_ms in [-1, 0, 2, 8, 68, 499] {
+            let p = processor(LocationTuning {
+                distance_filter: 0.0,
+                max_implied_speed: 0,
+                ..vehicle()
+            });
+            assert!(fix_at_speed(&p, 0.0, 5.0, -1.0, 1_000).accepted);
+
+            let r = fix_at_speed(&p, 100.0, 5.0, -1.0, 1_000 + interval_ms);
+
+            assert!(r.accepted);
+            assert_eq!(
+                r.effective_speed, 0.0,
+                "derived speed escaped the {interval_ms}ms gate",
+            );
+        }
+    }
+
+    #[test]
+    fn a_half_second_interval_can_still_derive_speed() {
+        let p = processor(LocationTuning {
+            distance_filter: 0.0,
+            max_implied_speed: 0,
+            ..vehicle()
+        });
+        assert!(fix_at_speed(&p, 0.0, 5.0, -1.0, 1_000).accepted);
+
+        let r = fix_at_speed(&p, 10.0, 5.0, -1.0, 1_500);
+
+        assert!(r.accepted);
+        assert!((r.effective_speed - 20.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn a_short_interval_does_not_discard_a_platform_speed() {
+        for speed in [0.0, 4.0] {
+            let p = processor(LocationTuning {
+                distance_filter: 0.0,
+                max_implied_speed: 0,
+                ..vehicle()
+            });
+            assert!(fix_at_speed(&p, 0.0, 5.0, 0.0, 1_000).accepted);
+
+            let r = fix_at_speed(&p, 100.0, 5.0, speed, 1_008);
+
+            assert!(r.accepted);
+            assert_eq!(r.effective_speed, speed);
+        }
     }
 }

@@ -42,6 +42,47 @@ final class SpeedMotionManagerTests: XCTestCase {
         manager.start()
     }
 
+    func testDefaultThresholdWakesAndHoldsMovingAtLowVehicleSpeed() {
+        stateManager.speedMotionState = 2
+        makeManager(movingThreshold: 0.9, wakeConfirmCount: 3)
+        manager.onLocation(speed: 1.2)
+        manager.onLocation(speed: 1.2)
+        XCTAssertEqual(manager.state, .stationary)
+        manager.onLocation(speed: 1.2)
+        XCTAssertEqual(manager.state, .moving)
+        for _ in 0..<10 { manager.onLocation(speed: 1.2) }
+        XCTAssertEqual(manager.state, .moving)
+    }
+
+    func testRestoredPartialConfirmationDoesNotCountOldFixes() {
+        stateManager.speedMotionState = 2
+        stateManager.speedWakeCount = 2
+        makeManager(wakeConfirmCount: 3)
+        manager.onLocation(speed: 3)
+        manager.onLocation(speed: 3)
+        XCTAssertEqual(manager.state, .stationary)
+        manager.onLocation(speed: 3)
+        XCTAssertEqual(manager.state, .moving)
+    }
+
+    func testUnknownSpeedUsesExistingCountdownAndBreaksWakeConfirmation() {
+        makeManager(stationaryDelaySeconds: 1, wakeConfirmCount: 3)
+        manager.onLocation(speed: -1)
+        XCTAssertEqual(manager.state, .slowing)
+        let deadline = Date().addingTimeInterval(2)
+        while manager.state != .stationary && Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
+        XCTAssertEqual(manager.state, .stationary)
+        manager.onLocation(speed: 3)
+        manager.onLocation(speed: .nan)
+        manager.onLocation(speed: 3)
+        manager.onLocation(speed: 3)
+        XCTAssertEqual(manager.state, .stationary)
+        manager.onLocation(speed: 3)
+        XCTAssertEqual(manager.state, .moving)
+    }
+
     // MARK: - Default state
 
     func testStartsInMovingStateWithNoPersistedState() {

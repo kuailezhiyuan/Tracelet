@@ -184,6 +184,8 @@ class TraceletHostApiImpl: TraceletHostApi {
         dict["stationaryPeriodicInterval"] = c.motion.stationaryPeriodicInterval
         dict["stationaryPeriodicAccuracy"] = c.motion.stationaryPeriodicAccuracy?.rawValue
         dict["speedWakeConfirmCount"] = c.motion.speedWakeConfirmCount
+        // Leave an omitted partial-update value unresolved at the bridge.
+        dict["enableGpsTremorOverride"] = c.motion.enableGpsTremorOverride
 
         // Geofence
         dict["geofenceInitialTriggerEntry"] = c.geofence.geofenceInitialTriggerEntry

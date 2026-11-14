@@ -155,6 +155,101 @@ class LocationEngine(
      *  late callbacks from a prior request can’t leak past a stop. */
     private var immediateFixCts: TraceletCancellationTokenSource? = null
     private var lastLocation: Location? = null
+    internal data class PaceSample(
+        val location: Location,
+        val speed: Double,
+        val filterReason: String? = null,
+        val source: String = "platform",
+        val reason: String = "valid",
+    ) {
+        val ageMs: Long
+            get() = (SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos) / 1_000_000
+    }
+
+    // The pace sink also sees distance-filtered fixes; the accepted-location cache can lag behind it.
+    internal var lastPaceSample: PaceSample? = null
+        private set
+    private var previousMotionLocation: Location? = null
+    private var lastMotionReason: String? = null
+
+    // Reports must distinguish unavailable evidence from a measured zero.
+    fun getMotionSpeedDiagnostics(): Map<String, Any?> = lastPaceSample?.let {
+        mapOf(
+            "motionFixAtMs" to it.location.time,
+            "motionSpeedMps" to it.speed.takeIf { speed -> speed >= 0 && speed.isFinite() },
+            "motionSpeedSource" to it.source,
+            "motionSpeedReason" to it.reason,
+        )
+    } ?: emptyMap()
+
+    // All acquisition paths share the same evidence gate, independent of stored speed.
+    internal fun feedSpeedMotion(location: Location, isStartupFix: Boolean = false) {
+        val ageMs = (SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos) / 1_000_000
+        if (ageMs !in 0..MAX_PACE_FIX_AGE_MS) return
+        val previous = previousMotionLocation
+        // The same cached fix may arrive through more than one request.
+        if (previous != null && location.elapsedRealtimeNanos <= previous.elapsedRealtimeNanos) return
+        previousMotionLocation = Location(location)
+        val raw = location.speed.toDouble()
+        var source = "unknown"
+        var reason = "no_speed"
+        var motionSpeed = -1.0
+        // A reported zero is a measurement, not a missing-speed sentinel.
+        if (location.hasSpeed() && raw.isFinite() && raw >= 0) {
+            val uncertainty = if (Build.VERSION.SDK_INT >= 26 && location.hasSpeedAccuracy()) {
+                location.speedAccuracyMetersPerSecond.toDouble()
+            } else 0.0
+            val moving = config.getSpeedMovingThreshold()
+            val configuredStationary = config.getSpeedStationaryThreshold()
+            val stationary = if (configuredStationary > 0) minOf(configuredStationary, moving) else moving * 0.65
+            // An uncertainty interval crossing either boundary cannot support that pace vote.
+            if (uncertainty.isFinite() && uncertainty >= 0 &&
+                !(raw - uncertainty < moving && raw + uncertainty >= moving) &&
+                !(raw - uncertainty < stationary && raw + uncertainty >= stationary)
+            ) {
+                motionSpeed = raw
+                source = "platform"
+                reason = "valid"
+            } else reason = "speed_uncertainty"
+        } else if (!isStartupFix && previous != null) {
+            val dt = (location.elapsedRealtimeNanos - previous.elapsedRealtimeNanos) / 1e9
+            val accuracy = location.accuracy.toDouble()
+            val previousAccuracy = previous.accuracy.toDouble()
+            val gate = config.getTrackingAccuracyThreshold()
+            // Provider changes and sub-500ms deltas can turn position noise into false speed.
+            reason = when {
+                location.provider != previous.provider -> "provider_changed"
+                dt < 0.5 -> "short_interval"
+                !location.hasAccuracy() || !previous.hasAccuracy() ||
+                    !accuracy.isFinite() || !previousAccuracy.isFinite() || accuracy <= 0 || previousAccuracy <= 0 ||
+                    (gate > 0 && (accuracy > gate || previousAccuracy > gate)) -> "position_accuracy"
+                else -> {
+                    val distance = previous.distanceTo(location).toDouble()
+                    // Only displacement outside both accuracy radii supports a motion vote.
+                    val significantDistance = distance - accuracy - previousAccuracy
+                    val implied = config.getMaxImpliedSpeed()
+                    when {
+                        !distance.isFinite() || significantDistance <= 0 -> "within_position_error"
+                        implied > 0 && distance / dt > implied -> "implied_speed"
+                        else -> {
+                            motionSpeed = significantDistance / dt
+                            source = "position_delta"
+                            "valid"
+                        }
+                    }
+                }
+            }
+        }
+        lastPaceSample = PaceSample(Location(location), motionSpeed, source = source, reason = reason)
+        // Persist evidence changes without writing one lifecycle log for every fix.
+        if (reason != lastMotionReason) {
+            TraceletLog.lifecycle("pace evidence: source=$source reason=$reason motionSpeed=$motionSpeed " +
+                "rawSpeed=${if (location.hasSpeed()) raw else "unknown"} accuracyM=${location.accuracy} fixMs=${location.time}")
+            lastMotionReason = reason
+        }
+        speedMotionSpeedSink?.invoke(motionSpeed)
+    }
+
     /** Last GPS-quality location (accuracy ≤ 100m).
      *  Used by heartbeat to avoid returning low-accuracy significant-change fixes. */
     private var lastGpsLocation: Location? = null
@@ -1049,6 +1144,8 @@ class LocationEngine(
 
     @Synchronized
     fun stop() {
+        // A new session must not derive speed across the stopped interval.
+        previousMotionLocation = null
         cancelPaceRetry()
         stationaryPaceTarget = null
         val pending = pendingPaceCallback
@@ -1164,14 +1261,8 @@ class LocationEngine(
                         enriched["event"] = "periodic"
                         enriched["odometer"] = state.odometer
                         
-                        // Only a speed the fix actually carried. `?: 0.0` here fed
-                        // the motion machine a fabricated "stopped" every time a
-                        // periodic fix arrived without one, which is the same
-                        // fabricated zero that drops a moving session to SLOWING.
+                        // Motion already consumed the raw one-shot; this map is only for dispatch/logging.
                         val speed = resolved["speed"] as? Double
-                        if (speed != null && speed > 0) {
-                            speedMotionSpeedSink?.invoke(speed)
-                        }
                         
                         events.sendLocation(enriched)
                         TraceletLog.debug("periodic fix dispatched — lat=$lat, lng=$lng, acc=$accuracy, speed=${speed ?: "unknown"}")
@@ -1615,6 +1706,9 @@ class LocationEngine(
     /** Destroys resources. */
     fun destroy() {
         stop()
+        lastPaceSample = null
+        previousMotionLocation = null
+        lastMotionReason = null
         stopAllWatchers()
         locationProcessor?.destroy()
         locationProcessor = null
@@ -1731,22 +1825,10 @@ class LocationEngine(
         } else {
             0.0
         }
-        val rawComputedSpeed = if (distance > 0 && timeDelta > 0) distance / timeDelta else 0.0
+        // Apply the same 500ms derivation floor to recorded speed and motion evidence.
+        val rawComputedSpeed = if (distance > 0 && timeDelta >= 0.5) distance / timeDelta else 0.0
 
-        // A derived speed is only as good as its time base, and `timeDelta > 0` is
-        // satisfied by one millisecond. Two fixes delivered back to back — routine
-        // when a session starts and a cached fix arrives alongside a fresh one —
-        // divide a real distance by an almost-zero interval, which produced
-        // thousands of m/s from a stationary device, enough to wake the speed
-        // motion machine out of STATIONARY since speedWakeConfirmCount is 1 by
-        // default (#342).
-        //
-        // `maxImpliedSpeed` already encodes what counts as credible movement; above
-        // it this is an artefact, not a measurement. Report *no* speed rather than a
-        // fabricated one. That is not #332 in reverse: this branch is only reached
-        // when the platform supplied no speed at all, so 0 is the pre-existing
-        // meaning of "unknown" rather than a value invented in place of a real
-        // reading. A genuinely moving device has a Doppler speed and never gets here.
+        // The stored-speed fallback keeps its existing zero sentinel; motion uses its own evidence.
         val maxImplied = config.getMaxImpliedSpeed().toDouble()
         val computedSpeed = if (maxImplied > 0 && rawComputedSpeed > maxImplied) {
             TraceletLog.debug(
@@ -1758,16 +1840,8 @@ class LocationEngine(
             rawComputedSpeed
         }
 
-        // Use platform speed if available, otherwise use computed speed.
-        //
-        // The startup anchor (#385) has no valid time base for the derivation:
-        // `lastLocation` survives stop(), so the first fix of a new session in a
-        // live process would be derived against wherever the *previous* session
-        // ended. A device carried 5 km between two sessions yields ~8 m/s —
-        // inside `maxImpliedSpeed` (80 m/s), so nothing discards it. A Doppler
-        // reading is a real measurement and is kept; the derivation is dropped,
-        // for this one fix only, which is what "no speed" already means here.
-        val effectiveSpeed = if (location.hasSpeed() && location.speed > 0) {
+        // Preserve measured zero; startup anchors must not derive speed across sessions.
+        val effectiveSpeed = if (location.hasSpeed() && location.speed.isFinite() && location.speed >= 0) {
             location.speed.toDouble()
         } else if (isStartupFix) {
             0.0
@@ -1826,28 +1900,8 @@ class LocationEngine(
             isMock = mock,
             adaptiveContext = adaptiveCtx,
         )
-        // IMPORTANT: Always feed the speed motion state machine, even when the
-        // Rust processor rejects the location for persistence/dispatch. The speed
-        // SM needs every speed reading to correctly transition between
-        // MOVING → SLOWING → STATIONARY. Without this, a stationary device
-        // whose locations are filtered (e.g. same lat/lng, no distance change)
-        // will never transition out of MOVING state.
-        //
-        // `result.effectiveSpeed` is the speed the processor resolved for this
-        // fix whether or not it accepted it — it used to be hardcoded to 0 on
-        // every rejection, which fed the machine a fabricated "stopped" for
-        // most of every drive (#332).
-        //
-        // The anchor keeps the measured-speed-only rule applied above: the
-        // *processor* derives its own speed from its own last accepted fix
-        // (`state.last_latitude`), which stop() does not clear either, so
-        // `result.effectiveSpeed` re-introduces exactly the cross-session
-        // derivation that `effectiveSpeed` just declined. Left alone it would
-        // overturn the pace `start()` committed a few lines before asking for
-        // the anchor — 8 m/s is well above `speedMovingThreshold` (1.5 m/s) —
-        // which is the silent override of a committed pace that #344 and
-        // StartCommittedPaceTest exist to prevent (#385).
-        val motionSpeed = if (isStartupFix) effectiveSpeed else result.effectiveSpeed
+        // Recorded speed and motion evidence have different quality requirements.
+        val recordedSpeed = if (isStartupFix) effectiveSpeed else result.effectiveSpeed
 
         // Only a *current* fix may tell the pace machine how fast we are going.
         //
@@ -1876,11 +1930,11 @@ class LocationEngine(
                 // report is actually describing.
                 TraceletLog.lifecycle(
                     "pace: a current fix again after $staleFixesSincePace stale one(s) — " +
-                        "speed=${"%.2f".format(motionSpeed)} m/s",
+                        "speed=${"%.2f".format(recordedSpeed)} m/s",
                 )
                 staleFixesSincePace = 0
             }
-            speedMotionSpeedSink?.invoke(motionSpeed)
+            feedSpeedMotion(location, isStartupFix)
         } else {
             staleFixesSincePace++
             // Once per run of stale fixes, not once per fix: the run is the
@@ -1888,7 +1942,7 @@ class LocationEngine(
             if (staleFixesSincePace == 1) {
                 TraceletLog.lifecycle(
                     "pace: ignoring a ${fixAgeMs}ms-old fix's speed " +
-                        "(${"%.2f".format(motionSpeed)} m/s) — a reading older than " +
+                        "(${"%.2f".format(recordedSpeed)} m/s) — a reading older than " +
                         "${MAX_PACE_FIX_AGE_MS}ms says nothing about the current pace, and " +
                         "letting it through stood a just-woken session back down",
                 )
@@ -1964,17 +2018,14 @@ class LocationEngine(
         if (location.accuracy > 0 && location.accuracy <= 100) {
             lastGpsLocation = location
         }
-        // `motionSpeed`, not `result.effectiveSpeed`: this field is read as the
-        // session's current speed, and start() seeds the speed machine with it
-        // — so an anchor's derived value would reach the machine one session
-        // later through that door even though the sink above declined it (#385).
-        lastEffectiveSpeed = motionSpeed
+        // Keep startup anchors measured-only in the recorded-location cache too.
+        lastEffectiveSpeed = recordedSpeed
         state.lastLocationTime = location.time
 
         val actualEvent = if (isForcedAccept) "motionchange" else event
         // Identical to result.effectiveSpeed for every fix but the anchor,
         // which reports what was measured rather than what was derived (#385).
-        val enriched = enrichLocation(location, actualEvent, motionSpeed, smoothedLat, smoothedLng)
+        val enriched = enrichLocation(location, actualEvent, recordedSpeed, smoothedLat, smoothedLng)
 
         fun dispatch(finalEnriched: Map<String, Any?>) {
             // Privacy zone check (Enterprise) — BEFORE audit + persist + send.
@@ -2299,6 +2350,8 @@ class LocationEngine(
             callback(null)
             return
         }
+        // A one-shot may wake a live session; a standalone query must not change its pace.
+        if (state.enabled) feedSpeedMotion(best)
         val enriched = enrichLocation(best, "getCurrentPosition").toMutableMap()
         mergeExtras(enriched, extras)
         resolveAddressAndDispatch(best, enriched) { finalEnriched ->

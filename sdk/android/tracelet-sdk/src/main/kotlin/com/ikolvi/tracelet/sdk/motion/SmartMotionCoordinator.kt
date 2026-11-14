@@ -46,63 +46,43 @@ class SmartMotionCoordinator(
     fun onAccelStateChange(isMoving: Boolean): uniffi.tracelet_core.CoordinatorAction {
         val action = coreCoordinator.onAccelStateChange(isMoving)
         logger.debug("SmartMotionCoordinator: onAccelStateChange -> isMoving=$isMoving, action=$action, isAccelMoving=${coreCoordinator.isAccelMoving()}, isSpeedMoving=${coreCoordinator.isSpeedMoving()}")
-        handleAction(action)
+        // SPEED callbacks also use this coordinator; only Smart owns the combined pace.
+        if (configManager.getMotionDetectionMode() == com.ikolvi.tracelet.sdk.model.MotionDetectionMode.SMART) {
+            stateManager.isMoving = isAccelMoving || isSpeedMoving
+        }
+        handleAction(action, "accel")
         return action
     }
 
-    /**
-     * Whether the last tremor decision declined a stale speed, so the lifecycle
-     * entry below fires once per run rather than once per call — the run is the
-     * event, mirroring `staleFixesSincePace` in [LocationEngine].
-     */
-    private var declinedStaleTremorSpeed = false
-
-    /**
-     * The last speed this process resolved, or `null` when it has resolved none
-     * — or when the one it has is too old to describe *now*.
-     *
-     * [LocationEngine.lastEffectiveSpeed] and `lastLocation` are written
-     * together on every accepted fix, so a null location is exactly "no fix has
-     * been accepted in this process" — which is *unknown*, not zero.
-     *
-     * The age gate is the same one the pace sink applies
-     * ([LocationEngine.MAX_PACE_FIX_AGE_MS]) and it exists for the same reason:
-     * a stored speed says nothing about the present. Without it a parked device
-     * froze `lastEffectiveSpeed` at its last value — 0.0057 m/s in the reported
-     * trace, well under [TREMOR_SPEED_THRESHOLD] — and stationary-periodic mode
-     * produces no fresh fix to replace it *by construction*. So when the
-     * accelerometer woke on a real walk minutes later, the override read that
-     * frozen value and overruled the wake, and the session never left
-     * stationary while the app was backgrounded. Reopening the app called
-     * `ready()`, which produced a fresh fix and unwedged it — which is why this
-     * was reported as "the location indicator only appears in the foreground".
-     *
-     * An old reading is *unknown* in exactly the sense `null` already means,
-     * and routing it there is what makes the two agree: `null` leaves the
-     * accelerometer standing, where a stale near-zero actively sided against it
-     * (#404).
-     */
     private val resolvedSpeed: Double?
         get() {
-            locationEngine.getLastLocation() ?: return null
-            val ageMs = locationEngine.paceFixAgeMs ?: return null
-            if (ageMs > LocationEngine.MAX_PACE_FIX_AGE_MS) {
-                if (!declinedStaleTremorSpeed) {
-                    declinedStaleTremorSpeed = true
-                    // Always-on: this is a wake being discarded, and at the
-                    // shipped log levels it left no trace at all (#318).
-                    com.ikolvi.tracelet.sdk.util.TraceletLog.lifecycle(
-                        "smart-motion: declining a ${ageMs}ms-old fix's speed " +
-                            "(${"%.4f".format(locationEngine.lastEffectiveSpeed)}m/s) for the " +
-                            "tremor override — a reading older than " +
-                            "${LocationEngine.MAX_PACE_FIX_AGE_MS}ms says nothing about now, " +
-                            "and letting it through vetoed a genuine accelerometer wake (#404)",
-                    )
-                }
-                return null
-            }
-            declinedStaleTremorSpeed = false
-            return locationEngine.lastEffectiveSpeed
+            val sample = locationEngine.lastPaceSample ?: return null
+            val accuracy = sample.location.accuracy.toDouble()
+            val threshold = configManager.getTrackingAccuracyThreshold()
+            // A rejected-quality fix must not replace missing evidence with a parked verdict.
+            if (sample.ageMs !in 0..LocationEngine.MAX_PACE_FIX_AGE_MS ||
+                !sample.speed.isFinite() || sample.speed < 0 ||
+                sample.filterReason !in listOf(null, "DISTANCE_FILTER", "SPARSE_FILTER") ||
+                !sample.location.hasAccuracy() || !accuracy.isFinite() || accuracy <= 0 ||
+                (threshold > 0 && accuracy > threshold)
+            ) return null
+            return sample.speed
+        }
+
+    // Keep the triggering pace input in switch logs so field reports can distinguish false speed from sensor motion.
+    private val speedEvidence: String
+        get() {
+            val sample = locationEngine.lastPaceSample ?: return "lastSpeed=unknown paceSample=none"
+            val location = sample.location
+            val source = sample.source
+            val rawSpeed = if (location.hasSpeed()) location.speed.toString() else "unknown"
+            val speedAccuracy = if (android.os.Build.VERSION.SDK_INT >= 26 && location.hasSpeedAccuracy()) {
+                location.speedAccuracyMetersPerSecond.toString()
+            } else "unknown"
+            return "lastSpeed=${resolvedSpeed ?: "unknown"}m/s paceSpeed=${sample.speed}m/s " +
+                "speedSource=$source rawSpeed=$rawSpeed speedAccuracy=$speedAccuracy " +
+                "fixAgeMs=${sample.ageMs} accuracyM=${location.accuracy} provider=${location.provider} " +
+                "filterReason=${sample.filterReason ?: "accepted"}"
         }
 
     /**
@@ -111,37 +91,20 @@ class SmartMotionCoordinator(
     fun onSpeedStateChange(isMoving: Boolean) {
         var overrideAction = uniffi.tracelet_core.CoordinatorAction.NONE
         if (!isMoving && coreCoordinator.isAccelMoving()) {
-            // Speed SM declared stationary (30s of speed < 1.5 m/s) but accel
-            // still reports moving. This could be:
-            //   a) Hand tremor while physically still (GPS speed ≈ 0 m/s)
-            //   b) Walking slowly (GPS speed 0.3-0.5 m/s, below speed threshold)
-            // Only override accel for case (a) — truly near-zero GPS speed.
-            // For case (b), trust the accelerometer: the user IS moving.
-            //
-            // #333: this used to read the raw `Location.speed`, which reports
-            // 0.0 on a fix that carries no speed at all, so an unknown speed
-            // passed the near-zero test and overruled a positive motion signal
-            // on missing data. `lastEffectiveSpeed` is the resolved value — it
-            // falls back to a distance/time derivation exactly when the platform
-            // reading is absent — and no resolved speed at all now leaves the
-            // accelerometer standing rather than silently siding against it.
-            val lastSpeed = resolvedSpeed
+            com.ikolvi.tracelet.sdk.util.TraceletLog.lifecycle(
+                "smart-motion: speed stationary while accel moving — " +
+                    "enableGpsTremorOverride=${configManager.getEnableGpsTremorOverride()} $speedEvidence",
+            )
+            // Low GPS speed cannot distinguish a slow walk from hand tremor.
+            val lastSpeed = if (configManager.getEnableGpsTremorOverride()) resolvedSpeed else null
             when {
                 lastSpeed == null ->
-                    logger.info("SmartMotionCoordinator: no GPS speed resolved yet — trusting accel, staying continuous.")
+                    logger.info("SmartMotionCoordinator: GPS tremor override disabled or no usable speed — trusting accel, staying continuous.")
                 lastSpeed <= TREMOR_SPEED_THRESHOLD -> {
                     logger.info("SmartMotionCoordinator: GPS speed near zero ($lastSpeed m/s) but accel moving — overriding accel to false (hand tremor).")
-                    // Through [onAccelStateChange], so the action this produces
-                    // is *handled*. The accel flag is the second half of the OR:
-                    // when the speed flag is already stationary, flipping it here
-                    // is the transition that carries the whole stop decision.
-                    // `evaluate_state` returned SWITCH_TO_STATIONARY_PERIODIC and
-                    // the return value went unread, then the
-                    // `onSpeedStateChange` below deduped to NONE because the flag
-                    // it would have flipped was already false — so nothing was
-                    // ever handled, the engine was never told, and continuous GPS
-                    // ran on a parked device for the rest of the session (#409).
-                    overrideAction = onAccelStateChange(false)
+                    // Handle the accel edge too: it may carry the actual stationary switch.
+                    overrideAction = coreCoordinator.onAccelStateChange(false)
+                    handleAction(overrideAction, "gps_tremor_override")
                 }
                 else ->
                     // Always-on: this is the decision that decides whether a
@@ -161,7 +124,11 @@ class SmartMotionCoordinator(
         }
         val action = coreCoordinator.onSpeedStateChange(isMoving)
         logger.debug("SmartMotionCoordinator: onSpeedStateChange -> isMoving=$isMoving, action=$action, isAccelMoving=${coreCoordinator.isAccelMoving()}, isSpeedMoving=${coreCoordinator.isSpeedMoving()}, overrideAction=$overrideAction")
-        handleAction(action)
+        // Publish Smart's OR even on a deduplicated edge, without overwriting SPEED's own pace.
+        if (configManager.getMotionDetectionMode() == com.ikolvi.tracelet.sdk.model.MotionDetectionMode.SMART) {
+            stateManager.isMoving = isAccelMoving || isSpeedMoving
+        }
+        handleAction(action, "speed")
     }
 
     /**
@@ -169,10 +136,10 @@ class SmartMotionCoordinator(
      */
     fun onManualPaceChange(isMoving: Boolean) {
         val accelAction = coreCoordinator.onAccelStateChange(isMoving)
-        handleAction(accelAction)
+        handleAction(accelAction, "manual")
         
         val speedAction = coreCoordinator.onSpeedStateChange(isMoving)
-        handleAction(speedAction)
+        handleAction(speedAction, "manual")
     }
     
     /**
@@ -250,7 +217,7 @@ class SmartMotionCoordinator(
                 "speedMoving=${coreCoordinator.isSpeedMoving()} " +
                 "streaming=${locationEngine.isTracking}",
         )
-        handleAction(action)
+        handleAction(action, "reconcile")
     }
 
     fun syncCurrentMode() {
@@ -338,18 +305,17 @@ class SmartMotionCoordinator(
      * asked of any "it stopped tracking while I was moving" report, and at the
      * shipped log levels the answer was not recorded anywhere.
      */
-    private fun recordModeSwitch(mode: String) {
-        val speedText = resolvedSpeed?.toString() ?: "unknown"
+    private fun recordModeSwitch(mode: String, trigger: String) {
         com.ikolvi.tracelet.sdk.util.TraceletLog.lifecycle(
-            "smart-motion: switching to $mode — accelMoving=${coreCoordinator.isAccelMoving()} " +
-                "speedMoving=${coreCoordinator.isSpeedMoving()} lastSpeed=${speedText}m/s",
+            "smart-motion: switching to $mode — trigger=$trigger accelMoving=${coreCoordinator.isAccelMoving()} " +
+                "speedMoving=${coreCoordinator.isSpeedMoving()} $speedEvidence",
         )
     }
 
-    private fun handleAction(action: uniffi.tracelet_core.CoordinatorAction) {
+    private fun handleAction(action: uniffi.tracelet_core.CoordinatorAction, trigger: String) {
         when (action) {
             uniffi.tracelet_core.CoordinatorAction.SWITCH_TO_CONTINUOUS -> {
-                recordModeSwitch("CONTINUOUS")
+                recordModeSwitch("CONTINUOUS", trigger)
                 val useForeground = configManager.isForegroundServiceEnabled()
                 logger.debug("SmartMotionCoordinator: SWITCH_TO_CONTINUOUS — useForeground=$useForeground")
                 if (useForeground || locationEngine.keepsStationaryStream) {
@@ -369,7 +335,7 @@ class SmartMotionCoordinator(
                 events.sendMotionChange(locationMap)
             }
             uniffi.tracelet_core.CoordinatorAction.SWITCH_TO_STATIONARY_GEOFENCES -> {
-                recordModeSwitch("STATIONARY_GEOFENCES")
+                recordModeSwitch("STATIONARY_GEOFENCES", trigger)
                 val useForeground = configManager.isForegroundServiceEnabled()
                 if (useForeground) {
                     LocationService.switchToStationaryGeofences(locationEngine, stateManager, configManager)
@@ -390,7 +356,7 @@ class SmartMotionCoordinator(
             }
             uniffi.tracelet_core.CoordinatorAction.SWITCH_TO_STATIONARY_PERIODIC -> {
                 val keepStreaming = locationEngine.keepsStationaryStream
-                recordModeSwitch(if (keepStreaming) "STATIONARY_CONTINUOUS" else "STATIONARY_PERIODIC")
+                recordModeSwitch(if (keepStreaming) "STATIONARY_CONTINUOUS" else "STATIONARY_PERIODIC", trigger)
                 val useForeground = configManager.isForegroundServiceEnabled()
                 if (keepStreaming) {
                     LocationService.switchToStationaryContinuous(locationEngine, stateManager)

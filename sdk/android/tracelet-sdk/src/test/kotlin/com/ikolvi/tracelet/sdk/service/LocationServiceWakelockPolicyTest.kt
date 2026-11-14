@@ -242,7 +242,7 @@ class LocationServiceWakelockPolicyTest {
     fun `sticky restarts restore the lock policy and motion transitions for all strategies`() {
         addWakeSensor()
         for (mode in StationaryTrackingMode.entries) {
-            config.setConfig(mapOf("stationaryTrackingMode" to mode.value))
+            config.setConfig(mapOf("stationaryTrackingMode" to mode.value, "speedStationaryDelay" to 1))
             state.isMoving = false
             state.speedMotionState = SpeedMotionState.STATIONARY
             startService(sticky = true)
@@ -257,8 +257,13 @@ class LocationServiceWakelockPolicyTest {
             idle()
             assertTrue(state.isMoving)
             assertTrue(assertNotNull(wakelock()).isHeld, mode.name)
+            // A stationary sensor alone must not release the lock while speed still reports motion.
             assertNotNull(detector.onMotionStateChanged).invoke(false)
             idle()
+            assertTrue(state.isMoving, "speed still reports motion")
+            assertTrue(assertNotNull(wakelock()).isHeld, mode.name)
+            assertNotNull(LocationService.bootSpeedMotionManager).onLocation(0.0)
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(1))
             assertFalse(state.isMoving)
             assertNull(wakelock(), mode.name)
             controller!!.destroy()

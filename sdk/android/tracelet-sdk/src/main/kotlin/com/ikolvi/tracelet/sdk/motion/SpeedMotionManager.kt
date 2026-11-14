@@ -157,7 +157,9 @@ class SpeedMotionManager(
         // Restore persisted state
         currentState = state.speedMotionState ?: SpeedMotionState.MOVING
         lowSpeedCount = state.speedLowCount
-        wakeCount = state.speedWakeCount
+        // Confirmation must come from distinct fixes in this run.
+        wakeCount = 0
+        state.speedWakeCount = 0
         lastFixTime = state.speedLastTransition
 
         // If explicitly forced, ensure we start in MOVING state.
@@ -249,11 +251,26 @@ class SpeedMotionManager(
      * Called by [LocationEngine] on every continuous or periodic fix
      * when speed-based motion detection is active.
      *
-     * @param speedMetersPerSecond GPS speed from the location fix.
+     * @param speedMetersPerSecond Trusted speed; negative or non-finite means unavailable.
      */
     fun onLocation(speedMetersPerSecond: Double) {
         if (!started) return
-        val speed = if (speedMetersPerSecond < 0) 0.0 else speedMetersPerSecond
+        if (!speedMetersPerSecond.isFinite() || speedMetersPerSecond < 0) {
+            // Missing evidence breaks confirmation without pretending the device measured zero.
+            highSpeedCount = 0
+            wakeCount = 0
+            state.speedWakeCount = 0
+            if (currentState == SpeedMotionState.MOVING) {
+                // Reuse the existing deadline so missing fixes cannot hold High indefinitely.
+                lowSpeedCount = 0
+                slowingStartTimeMs = SystemClock.elapsedRealtime()
+                transitionTo(SpeedMotionState.SLOWING, "speed evidence unavailable")
+                startSlowingTimer()
+            }
+            // Preserve an active countdown; intermittent unknowns must not postpone parking.
+            return
+        }
+        val speed = speedMetersPerSecond
 
         // Track inter-fix interval for SLOWING countdown.
         // Use elapsedRealtime() which is monotonic and immune to NTP / manual clock changes.
@@ -454,13 +471,10 @@ class SpeedMotionManager(
         state.speedWakeCount = wakeCount
         state.speedLastTransition = SystemClock.elapsedRealtime()
 
-        // Update isMoving for compatibility with existing consumers.
-        //
-        // Deliberately outside the no-op guard below: this is also where
-        // isMoving is re-synced, and SmartMotionCoordinator.handleAction writes
-        // the same field directly, so a changePace() that agrees with the
-        // current state is a legitimate re-assertion of it.
-        state.isMoving = newState != SpeedMotionState.STATIONARY
+        // Smart's combined pace belongs to the coordinator, not either input alone.
+        if (config.getMotionDetectionMode() != com.ikolvi.tracelet.sdk.model.MotionDetectionMode.SMART) {
+            state.isMoving = newState != SpeedMotionState.STATIONARY
+        }
 
         // #337: a "transition" that changes nothing is not a transition. An
         // event whose previousState equals its state tells a consumer nothing

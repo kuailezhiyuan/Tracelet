@@ -1,4 +1,5 @@
 import XCTest
+import CoreLocation
 @testable import TraceletSDK
 
 /// Tests for `TraceletSmartMotionCoordinator` — the native layer that arbitrates
@@ -171,5 +172,94 @@ final class SmartMotionCoordinatorTests: XCTestCase {
         XCTAssertTrue(
             coordinator.isAccelMoving,
             "the accelerometer must be left standing when no speed was resolved")
+    }
+
+    private func deliverFix(speed: Double, accuracy: Double = 5, age: TimeInterval = 0, latitude: Double = 36.7) {
+        let engine = sdk.locationEngine!
+        engine.locationManager(engine.locationManager, didUpdateLocations: [CLLocation(
+            coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: 117.1),
+            altitude: 0, horizontalAccuracy: accuracy, verticalAccuracy: 5,
+            course: -1, courseAccuracy: -1, speed: speed, speedAccuracy: 0.01,
+            timestamp: Date(timeIntervalSinceNow: -age))])
+    }
+
+    func testDefaultTremorOverrideStillHandlesTheStationarySwitch() {
+        XCTAssertTrue(sdk.configManager.getEnableGpsTremorOverride())
+        enterSession(mode: .continuous, isMoving: true)
+        coordinator.onAccelStateChange(isMoving: true)
+        deliverFix(speed: 0.09)
+
+        XCTAssertEqual(coordinator.onSpeedStateChange(isMoving: false), .switchToStationaryPeriodic)
+        XCTAssertFalse(coordinator.isAccelMoving)
+    }
+
+    func testDisabledTremorOverrideWaitsForTheAccelerometer() {
+        _ = sdk.configManager.setConfig(["motion": ["enableGpsTremorOverride": false]])
+        enterSession(mode: .continuous, isMoving: true)
+        coordinator.onAccelStateChange(isMoving: true)
+        deliverFix(speed: 0.09)
+
+        XCTAssertEqual(coordinator.onSpeedStateChange(isMoving: false), .none)
+        XCTAssertEqual(coordinator.onSpeedStateChange(isMoving: false), .none)
+        XCTAssertTrue(coordinator.isAccelMoving)
+        XCTAssertFalse(coordinator.isSpeedMoving)
+        XCTAssertEqual(coordinator.onAccelStateChange(isMoving: false), .switchToStationaryPeriodic)
+    }
+
+    func testTremorOverrideCanBeEnabledAgainWithoutRecreatingTheCoordinator() {
+        _ = sdk.configManager.setConfig(["enableGpsTremorOverride": false])
+        enterSession(mode: .continuous, isMoving: true)
+        coordinator.onAccelStateChange(isMoving: true)
+        deliverFix(speed: 0.09)
+        XCTAssertEqual(coordinator.onSpeedStateChange(isMoving: false), .none)
+
+        _ = sdk.configManager.setConfig(["enableGpsTremorOverride": true])
+
+        XCTAssertEqual(coordinator.onSpeedStateChange(isMoving: false), .switchToStationaryPeriodic)
+    }
+
+    func testSpeedDecisionUsesTheCurrentInputBeforeTheAcceptedCacheUpdates() {
+        enterSession(mode: .continuous, isMoving: true)
+        coordinator.onAccelStateChange(isMoving: true)
+        deliverFix(speed: 0.09)
+        sdk.locationEngine.speedSink = { [self] speed in
+            XCTAssertEqual(speed, 0.5, accuracy: 0.001)
+            XCTAssertEqual(sdk.locationEngine.lastEffectiveSpeed, 0.09, accuracy: 0.001)
+            XCTAssertEqual(coordinator.onSpeedStateChange(isMoving: false), .none)
+        }
+
+        deliverFix(speed: 0.5)
+
+        XCTAssertTrue(coordinator.isAccelMoving)
+    }
+
+    func testPoorCurrentFixDoesNotBorrowAPreviousAcceptedNearZeroSpeed() {
+        enterSession(mode: .continuous, isMoving: true)
+        coordinator.onAccelStateChange(isMoving: true)
+        deliverFix(speed: 0.09)
+        deliverFix(speed: 0.01, accuracy: 550)
+
+        XCTAssertEqual(coordinator.onSpeedStateChange(isMoving: false), .none)
+        XCTAssertTrue(coordinator.isAccelMoving)
+    }
+
+    func testStaleNearZeroSpeedDoesNotVetoMotion() {
+        enterSession(mode: .continuous, isMoving: true)
+        coordinator.onAccelStateChange(isMoving: true)
+        deliverFix(speed: 0.09, age: 300)
+
+        XCTAssertEqual(coordinator.onSpeedStateChange(isMoving: false), .none)
+        XCTAssertTrue(coordinator.isAccelMoving)
+    }
+
+    func testRejectedTeleportWithZeroFallbackDoesNotOverruleMotion() {
+        enterSession(mode: .continuous, isMoving: true)
+        coordinator.onAccelStateChange(isMoving: true)
+        deliverFix(speed: 0.09)
+        deliverFix(speed: -1, latitude: 40)
+        XCTAssertEqual(sdk.locationEngine.lastPaceSample?.reason, "short_interval")
+
+        XCTAssertEqual(coordinator.onSpeedStateChange(isMoving: false), .none)
+        XCTAssertTrue(coordinator.isAccelMoving)
     }
 }

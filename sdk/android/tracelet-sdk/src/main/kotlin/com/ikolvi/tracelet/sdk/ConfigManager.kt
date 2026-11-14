@@ -712,6 +712,9 @@ class ConfigManager(context: Context) {
     fun getSpeedWakeConfirmCount(): Int =
         getInt("speedWakeConfirmCount", DEFAULT_SPEED_WAKE_CONFIRM_COUNT)
 
+    // Preserve legacy behavior unless the app explicitly opts into independent Smart inputs.
+    fun getEnableGpsTremorOverride(): Boolean = getBool("enableGpsTremorOverride", true)
+
     // ---------------------------------------------------------------------------
     // Typed Getters (GeofenceConfig)
     // ---------------------------------------------------------------------------

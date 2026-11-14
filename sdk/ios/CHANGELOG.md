@@ -1,3 +1,9 @@
+## Unreleased
+
+**FIX**: Preserve measured zero speed through native and Rust processing. Motion uses validated platform speed or significant position displacement, rejects sub-500ms derivations and duplicate fixes, and treats unavailable speed through the existing slowing countdown. Diagnostic snapshots distinguish motion evidence from recorded speed.
+
+**FEAT**: Add `motion.enableGpsTremorOverride` (default `true`) to disable Smart mode's near-zero-speed override. The override reads the current pace input with freshness and quality checks instead of the previous accepted fix; switch logs include the trigger, both motion inputs, speed source, age and accuracy.
+
 ## 3.8.9
 
 **FIX**: `LocationEngine.motionChangeTransform` is applied to the motion change `changePace` sends; `TraceletSdk` installs `recordTripTransition(_:)` there, so the transition is recorded and `tripId` stamped before the event leaves. `handleMotionStateChange` previously fed the trip manager after `changePace` had already sent the event unstamped ([#442](https://github.com/Ikolvi/Tracelet/issues/442)).

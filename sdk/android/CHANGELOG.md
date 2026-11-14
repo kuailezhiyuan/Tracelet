@@ -1,3 +1,9 @@
+## Unreleased
+
+**FIX**: Preserve measured zero speed through native and Rust processing. Motion uses validated platform speed or significant position displacement, rejects sub-500ms derivations and duplicate fixes, and treats unavailable speed through the existing slowing countdown. Diagnostic snapshots distinguish motion evidence from recorded speed.
+
+**FEAT**: Add `motion.enableGpsTremorOverride` (default `true`) to disable Smart mode's near-zero-speed override. Speed evidence now comes from the pace input, not the accepted-position cache. Smart owns the combined moving state, and native takeover no longer forces the speed input stationary when only the accelerometer settles.
+
 ## 3.8.9
 
 **FIX**: `TraceletSdk.setEventSender()` wraps the sender in `TripStampingEventSender`, whose `sendMotionChange` runs `recordTripTransition()` — feed `tripManager`, stamp `tripId` — for every motion change, from `handleMotionStateChange`, `SmartMotionCoordinator`, the `SpeedMotionManager` callbacks and `LocationEngine.changePace` alike. The direct feed in `handleMotionStateChange`, skipped by SMART mode's early return, is removed ([#442](https://github.com/Ikolvi/Tracelet/issues/442)).

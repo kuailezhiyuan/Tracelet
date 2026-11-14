@@ -4485,7 +4485,8 @@ public final class TraceletSdk {
                 "pace: start() committed a stationary pace — not seeding the machine from "
                     + "the last resolved speed, which could only overrule it")
         } else if locationEngine.getLastLocation() != nil {
-            smm.onLocation(speed: locationEngine.lastEffectiveSpeed)
+            // The accepted fix may already have voted; reuse the freshness and deduplication gates.
+            if let location = locationEngine.getLastLocation() { locationEngine.feedSpeedMotion(location) }
         } else {
             TraceletLog.lifecycle(
                 "pace: no fix resolved in this process yet — not seeding the machine with a "

@@ -270,6 +270,8 @@ public final class ConfigManager {
     public func getStationaryPeriodicInterval() -> Int { (cache["stationaryPeriodicInterval"] as? NSNumber)?.intValue ?? 120 }
     public func getStationaryPeriodicAccuracy() -> Int { (cache["stationaryPeriodicAccuracy"] as? NSNumber)?.intValue ?? 1 }
     public func getSpeedWakeConfirmCount() -> Int { (cache["speedWakeConfirmCount"] as? NSNumber)?.intValue ?? 1 }
+    // Preserve legacy behavior unless the app explicitly opts into independent Smart inputs.
+    public func getEnableGpsTremorOverride() -> Bool { cache["enableGpsTremorOverride"] as? Bool ?? true }
 
     /// Shake threshold above which a sample counts as movement, in g
     /// (gravity-subtracted, which is what `CMMotionManager` reports directly).

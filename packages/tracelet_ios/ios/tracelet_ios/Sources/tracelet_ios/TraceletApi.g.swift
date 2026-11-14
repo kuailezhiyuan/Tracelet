@@ -1194,6 +1194,8 @@ struct TlMotionConfig: Hashable {
   var stationaryPeriodicInterval: Int64? = nil
   var stationaryPeriodicAccuracy: TlDesiredAccuracy? = nil
   var speedWakeConfirmCount: Int64? = nil
+  /// Appended to preserve wire indexes; null keeps native compatibility defaults.
+  var enableGpsTremorOverride: Bool? = nil
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -1220,6 +1222,7 @@ struct TlMotionConfig: Hashable {
     let stationaryPeriodicInterval: Int64? = nilOrValue(pigeonVar_list[19])
     let stationaryPeriodicAccuracy: TlDesiredAccuracy? = nilOrValue(pigeonVar_list[20])
     let speedWakeConfirmCount: Int64? = nilOrValue(pigeonVar_list[21])
+    let enableGpsTremorOverride: Bool? = nilOrValue(pigeonVar_list[22])
 
     return TlMotionConfig(
       stopTimeout: stopTimeout,
@@ -1243,7 +1246,8 @@ struct TlMotionConfig: Hashable {
       stationaryTrackingMode: stationaryTrackingMode,
       stationaryPeriodicInterval: stationaryPeriodicInterval,
       stationaryPeriodicAccuracy: stationaryPeriodicAccuracy,
-      speedWakeConfirmCount: speedWakeConfirmCount
+      speedWakeConfirmCount: speedWakeConfirmCount,
+      enableGpsTremorOverride: enableGpsTremorOverride
     )
   }
   func toList() -> [Any?] {
@@ -1270,13 +1274,14 @@ struct TlMotionConfig: Hashable {
       stationaryPeriodicInterval,
       stationaryPeriodicAccuracy,
       speedWakeConfirmCount,
+      enableGpsTremorOverride,
     ]
   }
   static func == (lhs: TlMotionConfig, rhs: TlMotionConfig) -> Bool {
     if Swift.type(of: lhs) != Swift.type(of: rhs) {
       return false
     }
-    return deepEqualsTraceletApi(lhs.stopTimeout, rhs.stopTimeout) && deepEqualsTraceletApi(lhs.motionTriggerDelay, rhs.motionTriggerDelay) && deepEqualsTraceletApi(lhs.disableMotionActivityUpdates, rhs.disableMotionActivityUpdates) && deepEqualsTraceletApi(lhs.isMoving, rhs.isMoving) && deepEqualsTraceletApi(lhs.activityRecognitionInterval, rhs.activityRecognitionInterval) && deepEqualsTraceletApi(lhs.minimumActivityRecognitionConfidence, rhs.minimumActivityRecognitionConfidence) && deepEqualsTraceletApi(lhs.disableStopDetection, rhs.disableStopDetection) && deepEqualsTraceletApi(lhs.stopDetectionDelay, rhs.stopDetectionDelay) && deepEqualsTraceletApi(lhs.stopOnStationary, rhs.stopOnStationary) && deepEqualsTraceletApi(lhs.activityTypes, rhs.activityTypes) && deepEqualsTraceletApi(lhs.stationaryRadius, rhs.stationaryRadius) && deepEqualsTraceletApi(lhs.useSignificantChangesOnly, rhs.useSignificantChangesOnly) && deepEqualsTraceletApi(lhs.shakeThreshold, rhs.shakeThreshold) && deepEqualsTraceletApi(lhs.stillThreshold, rhs.stillThreshold) && deepEqualsTraceletApi(lhs.stillSampleCount, rhs.stillSampleCount) && deepEqualsTraceletApi(lhs.motionDetectionMode, rhs.motionDetectionMode) && deepEqualsTraceletApi(lhs.speedMovingThreshold, rhs.speedMovingThreshold) && deepEqualsTraceletApi(lhs.speedStationaryDelay, rhs.speedStationaryDelay) && deepEqualsTraceletApi(lhs.stationaryTrackingMode, rhs.stationaryTrackingMode) && deepEqualsTraceletApi(lhs.stationaryPeriodicInterval, rhs.stationaryPeriodicInterval) && deepEqualsTraceletApi(lhs.stationaryPeriodicAccuracy, rhs.stationaryPeriodicAccuracy) && deepEqualsTraceletApi(lhs.speedWakeConfirmCount, rhs.speedWakeConfirmCount)
+    return deepEqualsTraceletApi(lhs.stopTimeout, rhs.stopTimeout) && deepEqualsTraceletApi(lhs.motionTriggerDelay, rhs.motionTriggerDelay) && deepEqualsTraceletApi(lhs.disableMotionActivityUpdates, rhs.disableMotionActivityUpdates) && deepEqualsTraceletApi(lhs.isMoving, rhs.isMoving) && deepEqualsTraceletApi(lhs.activityRecognitionInterval, rhs.activityRecognitionInterval) && deepEqualsTraceletApi(lhs.minimumActivityRecognitionConfidence, rhs.minimumActivityRecognitionConfidence) && deepEqualsTraceletApi(lhs.disableStopDetection, rhs.disableStopDetection) && deepEqualsTraceletApi(lhs.stopDetectionDelay, rhs.stopDetectionDelay) && deepEqualsTraceletApi(lhs.stopOnStationary, rhs.stopOnStationary) && deepEqualsTraceletApi(lhs.activityTypes, rhs.activityTypes) && deepEqualsTraceletApi(lhs.stationaryRadius, rhs.stationaryRadius) && deepEqualsTraceletApi(lhs.useSignificantChangesOnly, rhs.useSignificantChangesOnly) && deepEqualsTraceletApi(lhs.shakeThreshold, rhs.shakeThreshold) && deepEqualsTraceletApi(lhs.stillThreshold, rhs.stillThreshold) && deepEqualsTraceletApi(lhs.stillSampleCount, rhs.stillSampleCount) && deepEqualsTraceletApi(lhs.motionDetectionMode, rhs.motionDetectionMode) && deepEqualsTraceletApi(lhs.speedMovingThreshold, rhs.speedMovingThreshold) && deepEqualsTraceletApi(lhs.speedStationaryDelay, rhs.speedStationaryDelay) && deepEqualsTraceletApi(lhs.stationaryTrackingMode, rhs.stationaryTrackingMode) && deepEqualsTraceletApi(lhs.stationaryPeriodicInterval, rhs.stationaryPeriodicInterval) && deepEqualsTraceletApi(lhs.stationaryPeriodicAccuracy, rhs.stationaryPeriodicAccuracy) && deepEqualsTraceletApi(lhs.speedWakeConfirmCount, rhs.speedWakeConfirmCount) && deepEqualsTraceletApi(lhs.enableGpsTremorOverride, rhs.enableGpsTremorOverride)
   }
 
   func hash(into hasher: inout Hasher) {
@@ -1303,6 +1308,7 @@ struct TlMotionConfig: Hashable {
     deepHashTraceletApi(value: stationaryPeriodicInterval, hasher: &hasher)
     deepHashTraceletApi(value: stationaryPeriodicAccuracy, hasher: &hasher)
     deepHashTraceletApi(value: speedWakeConfirmCount, hasher: &hasher)
+    deepHashTraceletApi(value: enableGpsTremorOverride, hasher: &hasher)
   }
 }
 

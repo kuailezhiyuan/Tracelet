@@ -170,7 +170,9 @@ public final class SpeedMotionManager {
             state = .moving
         }
         lowSpeedCount = stateManager.speedLowCount
-        wakeCount = stateManager.speedWakeCount
+        // Confirmation must come from distinct fixes in this run.
+        wakeCount = 0
+        stateManager.speedWakeCount = 0
         slowingStartTime = stateManager.speedLastTransition
 
         if forceMoving {
@@ -247,13 +249,31 @@ public final class SpeedMotionManager {
 
     /// Drive state machine transitions from a location fix speed.
     ///
-    /// - Parameter speed: `CLLocation.speed` in m/s. Negative values (invalid)
-    ///   are treated as 0 (stationary).
+    /// - Parameter speed: trusted speed in m/s; a negative/non-finite value
+    ///   means unavailable and cannot confirm movement.
     public func onLocation(speed: Double) {
         guard isRunning else { return }
 
         let now = ProcessInfo.processInfo.systemUptime
-        let effectiveSpeed = max(speed, 0)
+        guard speed.isFinite, speed >= 0 else {
+            // Missing evidence breaks confirmation without pretending the device measured zero.
+            highSpeedCount = 0
+            wakeCount = 0
+            stateManager.speedWakeCount = 0
+            if state == .moving {
+                // Reuse the existing deadline so missing fixes cannot hold High indefinitely.
+                let previousState = state
+                state = .slowing
+                lowSpeedCount = 0
+                slowingStartTime = now
+                startSlowingTimer()
+                delegate?.speedMotionDidStartSlowing()
+                commitTransition(from: previousState, because: "speed evidence unavailable")
+            }
+            // Preserve an active countdown; intermittent unknowns must not postpone parking.
+            return
+        }
+        let effectiveSpeed = speed
 
         // Each handler commits its own transition through `commitTransition`.
         // A second, outer commit used to run here as well, which emitted most

@@ -1906,6 +1906,7 @@ class MotionConfig {
     int? stationaryPeriodicInterval,
     DesiredAccuracy? stationaryPeriodicAccuracy,
     int? speedWakeConfirmCount,
+    bool? enableGpsTremorOverride,
   }) : _stopTimeout = stopTimeout,
        _motionTriggerDelay = motionTriggerDelay,
        _disableMotionActivityUpdates = disableMotionActivityUpdates,
@@ -1929,6 +1930,7 @@ class MotionConfig {
        _stationaryPeriodicInterval = stationaryPeriodicInterval,
        _stationaryPeriodicAccuracy = stationaryPeriodicAccuracy,
        _speedWakeConfirmCount = speedWakeConfirmCount,
+       _enableGpsTremorOverride = enableGpsTremorOverride,
        // The bounds constrain only values the caller actually supplied — an
        // unset field carries no value to validate (#321).
        assert(
@@ -2038,6 +2040,9 @@ class MotionConfig {
       speedWakeConfirmCount: map.containsKey('speedWakeConfirmCount')
           ? ensureInt(map['speedWakeConfirmCount'], fallback: 1)
           : null,
+      enableGpsTremorOverride: map.containsKey('enableGpsTremorOverride')
+          ? ensureBool(map['enableGpsTremorOverride'], fallback: true)
+          : null,
     );
   }
 
@@ -2063,6 +2068,7 @@ class MotionConfig {
   final int? _stationaryPeriodicInterval;
   final DesiredAccuracy? _stationaryPeriodicAccuracy;
   final int? _speedWakeConfirmCount;
+  final bool? _enableGpsTremorOverride;
   final double? _shakeThreshold;
   final double? _stillThreshold;
   final int? _stillSampleCount;
@@ -2266,6 +2272,13 @@ class MotionConfig {
   /// stationary accuracy.
   int get speedWakeConfirmCount => _speedWakeConfirmCount ?? 1;
 
+  /// In smart mode, lets a fresh, valid speed at or below 0.15 m/s override
+  /// a moving accelerometer when the speed machine declares stationary.
+  /// Defaults to `true` for compatibility. Set to `false` to require both
+  /// motion sources to report stationary independently; this can delay parking
+  /// while the phone is being held or shaken.
+  bool get enableGpsTremorOverride => _enableGpsTremorOverride ?? true;
+
   /// Parses [MotionDetectionMode] from a String name or int index.
   static MotionDetectionMode _parseMotionDetectionMode(Object? raw) {
     if (raw is String) {
@@ -2337,6 +2350,8 @@ class MotionConfig {
         other._stationaryPeriodicAccuracy ?? _stationaryPeriodicAccuracy,
     speedWakeConfirmCount:
         other._speedWakeConfirmCount ?? _speedWakeConfirmCount,
+    enableGpsTremorOverride:
+        other._enableGpsTremorOverride ?? _enableGpsTremorOverride,
   );
 
   /// Returns this config with every field pinned to its effective value.
@@ -2378,6 +2393,7 @@ class MotionConfig {
     stationaryPeriodicInterval: stationaryPeriodicInterval,
     stationaryPeriodicAccuracy: stationaryPeriodicAccuracy,
     speedWakeConfirmCount: speedWakeConfirmCount,
+    enableGpsTremorOverride: enableGpsTremorOverride,
   );
 
   /// Serializes to a map.
@@ -2425,6 +2441,8 @@ class MotionConfig {
         'stationaryPeriodicAccuracy': _stationaryPeriodicAccuracy.index,
       if (_speedWakeConfirmCount != null)
         'speedWakeConfirmCount': _speedWakeConfirmCount,
+      if (_enableGpsTremorOverride != null)
+        'enableGpsTremorOverride': _enableGpsTremorOverride,
     };
   }
 
@@ -2461,6 +2479,7 @@ class MotionConfig {
         ? null
         : TlDesiredAccuracy.values[_stationaryPeriodicAccuracy.index],
     speedWakeConfirmCount: _speedWakeConfirmCount,
+    enableGpsTremorOverride: _enableGpsTremorOverride,
   );
 
   @override
@@ -2494,7 +2513,8 @@ class MotionConfig {
           _stationaryTrackingMode == other._stationaryTrackingMode &&
           _stationaryPeriodicInterval == other._stationaryPeriodicInterval &&
           _stationaryPeriodicAccuracy == other._stationaryPeriodicAccuracy &&
-          _speedWakeConfirmCount == other._speedWakeConfirmCount;
+          _speedWakeConfirmCount == other._speedWakeConfirmCount &&
+          _enableGpsTremorOverride == other._enableGpsTremorOverride;
 
   @override
   String toString() =>
@@ -2530,6 +2550,7 @@ class MotionConfig {
     _stationaryPeriodicInterval,
     _stationaryPeriodicAccuracy,
     _speedWakeConfirmCount,
+    _enableGpsTremorOverride,
   ]);
 }
 

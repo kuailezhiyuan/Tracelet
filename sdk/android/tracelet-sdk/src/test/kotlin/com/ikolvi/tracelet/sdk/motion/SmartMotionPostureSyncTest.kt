@@ -403,8 +403,89 @@ class SmartMotionPostureSyncTest {
         assertNotSame(callback, client.callback)
     }
 
+    @Test
+    fun `speed decision uses the current input even before the accepted cache updates`() {
+        state.isMoving = true
+        coordinator.syncCurrentMode()
+        coordinator.onAccelStateChange(true)
+        engine.start()
+        idle()
+        deliverFix(0.09f)
+
+        engine.speedMotionSpeedSink = {
+            assertTrue(engine.lastEffectiveSpeed <= 0.15)
+            assertEquals(0.5, engine.lastPaceSample!!.speed, 0.001)
+            coordinator.onSpeedStateChange(false)
+        }
+        deliverFix(0.5f)
+
+        assertTrue(coordinator.isAccelMoving)
+        assertTrue(state.isMoving)
+        assertTrue(engine.isTracking)
+    }
+
+    private fun evidenceFix(speed: Float?, metres: Double = 0.0, ageMs: Long = 0, accuracyM: Float = 5f, providerName: String = "gps", uncertainty: Float? = null) =
+        Location(providerName).apply {
+            latitude = 36.7 + metres / 111_320
+            longitude = 117.1
+            accuracy = accuracyM
+            if (speed != null) this.speed = speed
+            if (uncertainty != null) speedAccuracyMetersPerSecond = uncertainty
+            time = System.currentTimeMillis() - ageMs
+            elapsedRealtimeNanos = android.os.SystemClock.elapsedRealtimeNanos() - ageMs * 1_000_000
+        }
+
+    @Test
+    fun `motion evidence keeps zero and rejects millisecond or inaccurate drift`() {
+        org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofSeconds(20))
+        val speeds = mutableListOf<Double>()
+        engine.speedMotionSpeedSink = { speeds.add(it) }
+        engine.feedSpeedMotion(evidenceFix(0f, ageMs = 5000))
+        engine.feedSpeedMotion(evidenceFix(0f, metres = 54.0, ageMs = 4000))
+        assertEquals(listOf(0.0, 0.0), speeds)
+        engine.feedSpeedMotion(evidenceFix(null, metres = 100.0, ageMs = 3998))
+        assertTrue(speeds.last() < 0)
+        assertEquals("short_interval", engine.getMotionSpeedDiagnostics()["motionSpeedReason"])
+        engine.feedSpeedMotion(evidenceFix(null, metres = 120.0, ageMs = 2000, accuracyM = 95f))
+        engine.feedSpeedMotion(evidenceFix(null, metres = 139.2, ageMs = 1000, accuracyM = 90f))
+        assertTrue(speeds.last() < 0)
+        assertEquals("within_position_error", engine.getMotionSpeedDiagnostics()["motionSpeedReason"])
+    }
+
+    @Test
+    fun `uncertain speed inside the hysteresis band is also unknown`() {
+        engine.feedSpeedMotion(evidenceFix(0.7f, uncertainty = 10f))
+        assertEquals("speed_uncertainty", engine.getMotionSpeedDiagnostics()["motionSpeedReason"])
+        assertTrue(engine.lastPaceSample!!.speed < 0)
+    }
+
+    @Test
+    fun `repeated or out of order fixes cannot become extra confirmations`() {
+        org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofSeconds(20))
+        val speeds = mutableListOf<Double>()
+        engine.speedMotionSpeedSink = { speeds.add(it) }
+        val fix = evidenceFix(3f)
+        engine.feedSpeedMotion(fix)
+        engine.feedSpeedMotion(fix)
+        engine.feedSpeedMotion(evidenceFix(3f, ageMs = 1000))
+        assertEquals(listOf(3.0), speeds)
+    }
+
+    @Test
+    fun `credible vehicle delta survives missing speed but provider switches do not`() {
+        org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofSeconds(20))
+        val speeds = mutableListOf<Double>()
+        engine.speedMotionSpeedSink = { speeds.add(it) }
+        engine.feedSpeedMotion(evidenceFix(null, ageMs = 5000))
+        engine.feedSpeedMotion(evidenceFix(null, metres = 100.0, ageMs = 1000))
+        assertEquals(22.5, speeds.last(), 0.1)
+        engine.feedSpeedMotion(evidenceFix(null, metres = 200.0, providerName = "network"))
+        assertTrue(speeds.last() < 0)
+        assertEquals("provider_changed", engine.getMotionSpeedDiagnostics()["motionSpeedReason"])
+    }
+
     /**
-     * Feeds one accepted fix so `resolvedSpeed` is a resolved ~0 rather than
+     * Feeds one current fix so `resolvedSpeed` is a resolved ~0 rather than
      * `null`, which the coordinator reads as *unknown* and refuses to override
      * the accelerometer on (#333).
      */

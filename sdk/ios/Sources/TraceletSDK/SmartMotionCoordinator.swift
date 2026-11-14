@@ -95,7 +95,7 @@ public class TraceletSmartMotionCoordinator {
             "smart-motion: reconciled the posture — action=\(action) "
                 + "accelMoving=\(isAccelMoving) speedMoving=\(isSpeedMoving) "
                 + "streaming=\(sdk?.locationEngine?.isContinuousStreaming ?? false)")
-        handleAction(action)
+        handleAction(action, trigger: "reconcile")
     }
 
     public func syncCurrentMode() {
@@ -156,7 +156,7 @@ public class TraceletSmartMotionCoordinator {
     public func onAccelStateChange(isMoving: Bool) -> CoordinatorAction {
         guard let action = coreCoordinator?.onAccelStateChange(isMoving: isMoving) else { return .none }
         TraceletLog.debug("[Tracelet] SmartMotionCoordinator: onAccelStateChange -> isMoving=\(isMoving), action=\(action)")
-        handleAction(action)
+        handleAction(action, trigger: "accel")
         return action
     }
     
@@ -164,49 +164,31 @@ public class TraceletSmartMotionCoordinator {
     /// tremor on a physically still device rather than as real motion.
     private static let tremorSpeedThreshold: Double = 0.15
 
-    /// Whether the last tremor decision declined a stale speed, so the
-    /// lifecycle entry below fires once per run rather than once per call — the
-    /// run is the event, mirroring `staleFixesSincePace` in ``LocationEngine``.
-    private var declinedStaleTremorSpeed = false
-
-    /// The last speed this process resolved, or `nil` when it has resolved none
-    /// — or when the one it has is too old to describe *now*.
-    ///
-    /// `lastEffectiveSpeed` and `lastLocation` are written together on every
-    /// accepted fix, so a nil location is exactly "no fix has been accepted in
-    /// this process" — which is *unknown*, not zero.
-    ///
-    /// The age gate is the same one the pace sink applies
-    /// (``LocationEngine/maximumPaceFixAge``) and it exists for the same
-    /// reason: a stored speed says nothing about the present. Without it a
-    /// parked device froze `lastEffectiveSpeed` at its last value, and
-    /// stationary-periodic mode produces no fresh fix to replace it *by
-    /// construction* — so when the accelerometer woke on a real walk minutes
-    /// later, the override read that frozen value and overruled the wake.
-    ///
-    /// An old reading is *unknown* in exactly the sense `nil` already means,
-    /// and routing it there is what makes the two agree: `nil` leaves the
-    /// accelerometer standing, where a stale near-zero actively sided against
-    /// it (#404).
     private var resolvedSpeed: Double? {
-        guard let engine = sdk?.locationEngine,
-              engine.getLastLocation() != nil,
-              let age = engine.paceFixAge else { return nil }
-        guard age <= LocationEngine.maximumPaceFixAge else {
-            if !declinedStaleTremorSpeed {
-                declinedStaleTremorSpeed = true
-                // Always-on: this is a wake being discarded, and at the shipped
-                // log levels it left no trace at all (#318).
-                TraceletLog.lifecycle(String(
-                    format: "smart-motion: declining a %.1fs-old fix's speed (%.4f m/s) for the "
-                        + "tremor override — a reading older than %.0fs says nothing about now, "
-                        + "and letting it through vetoed a genuine accelerometer wake (#404)",
-                    age, engine.lastEffectiveSpeed, LocationEngine.maximumPaceFixAge))
-            }
-            return nil
+        guard let sample = sdk?.locationEngine?.lastPaceSample else { return nil }
+        let accuracy = sample.location.horizontalAccuracy
+        let threshold = sdk?.configManager?.getTrackingAccuracyThreshold() ?? 0
+        // A rejected-quality fix must not replace missing evidence with a parked verdict.
+        guard sample.age >= 0, sample.age <= LocationEngine.maximumPaceFixAge,
+              sample.speed.isFinite, sample.speed >= 0,
+              sample.filterReason == nil || sample.filterReason == "DISTANCE_FILTER" || sample.filterReason == "SPARSE_FILTER",
+              accuracy.isFinite, accuracy > 0,
+              threshold <= 0 || accuracy <= Double(threshold) else { return nil }
+        return sample.speed
+    }
+
+    // Keep the triggering pace input in switch logs so field reports can distinguish false speed from sensor motion.
+    private var speedEvidence: String {
+        guard let sample = sdk?.locationEngine?.lastPaceSample else {
+            return "lastSpeed=unknown paceSample=none"
         }
-        declinedStaleTremorSpeed = false
-        return engine.lastEffectiveSpeed
+        let location = sample.location
+        let source = sample.source
+        let speedText = resolvedSpeed.map { String(format: "%.2f", $0) } ?? "unknown"
+        return "lastSpeed=\(speedText)m/s paceSpeed=\(sample.speed)m/s speedSource=\(source) "
+            + "rawSpeed=\(location.speed) speedAccuracy=\(location.speedAccuracy) "
+            + "fixAgeMs=\(String(format: "%.0f", sample.age * 1000)) accuracyM=\(location.horizontalAccuracy) provider=core_location "
+            + "filterReason=\(sample.filterReason ?? "accepted")"
     }
 
     /// Returns the action taken, mirroring ``onAccelStateChange(isMoving:)``.
@@ -217,39 +199,19 @@ public class TraceletSmartMotionCoordinator {
     public func onSpeedStateChange(isMoving: Bool) -> CoordinatorAction {
         var overrideAction: CoordinatorAction = .none
         if !isMoving && isAccelMoving {
-            // The speed machine says stationary and the accelerometer disagrees.
-            // Two situations look like this:
-            //   a) the device is physically still and the accelerometer is
-            //      picking up hand tremor — GPS speed is genuinely ~0;
-            //   b) the user is walking slowly, below the speed threshold — the
-            //      accelerometer is the one telling the truth.
-            // Only (a) justifies overruling a positive motion signal.
-            //
-            // #333: this used to read `getLastLocation()?.speed`, the raw
-            // CLLocation value, which is **-1** on a fix that carries no speed —
-            // and -1 sails through a `<= 0.15` test. An unknown speed was
-            // therefore treated as proof the device was parked, and the
-            // accelerometer got overridden on missing data. `lastEffectiveSpeed`
-            // is the resolved value (documented on its declaration as existing
-            // precisely because the cached CLLocation.speed "may be stale, 0, or
-            // -1"), and no resolved speed at all now leaves the accelerometer
-            // standing rather than silently siding against it.
-            switch resolvedSpeed {
+            let enabled = sdk?.configManager?.getEnableGpsTremorOverride() ?? true
+            TraceletLog.lifecycle(
+                "smart-motion: speed stationary while accel moving — "
+                    + "enableGpsTremorOverride=\(enabled) \(speedEvidence)")
+            // Low GPS speed cannot distinguish a slow walk from hand tremor.
+            switch enabled ? resolvedSpeed : nil {
             case .none:
-                TraceletLog.debug("[Tracelet] SmartMotionCoordinator: no GPS speed resolved yet — trusting accel, staying continuous.")
+                TraceletLog.debug("[Tracelet] SmartMotionCoordinator: GPS tremor override disabled or no usable speed — trusting accel, staying continuous.")
             case .some(let speed) where speed <= TraceletSmartMotionCoordinator.tremorSpeedThreshold:
                 TraceletLog.debug(String(format: "[Tracelet] SmartMotionCoordinator: GPS speed near zero (%.2f m/s) — overriding accel to false (hand tremor).", speed))
-                // Through the wrapper, so the action this produces is *handled*.
-                // It used to be `_ = coreCoordinator?.onAccelStateChange(false)`,
-                // and the accel flag is the second half of the OR: when the speed
-                // flag is already stationary, flipping it here is the transition
-                // that carries the whole stop decision. `evaluate_state` returned
-                // `.switchToStationaryPeriodic` and it went on the floor, then the
-                // `onSpeedStateChange` below deduped to `.none` because the flag
-                // it would have flipped was already false — so nothing was ever
-                // handled, the engine was never told, and continuous GPS ran on a
-                // parked device for the rest of the session (#409).
-                overrideAction = onAccelStateChange(isMoving: false)
+                // Handle the accel edge too: it may carry the actual stationary switch.
+                overrideAction = coreCoordinator?.onAccelStateChange(isMoving: false) ?? .none
+                handleAction(overrideAction, trigger: "gps_tremor_override")
             case .some(let speed):
                 TraceletLog.debug(String(format: "[Tracelet] SmartMotionCoordinator: GPS speed %.2f m/s is above the %.2f m/s tremor threshold — trusting accel, staying continuous.",
                                          speed, TraceletSmartMotionCoordinator.tremorSpeedThreshold))
@@ -257,7 +219,7 @@ public class TraceletSmartMotionCoordinator {
         }
         guard let action = coreCoordinator?.onSpeedStateChange(isMoving: isMoving) else { return overrideAction }
         TraceletLog.debug("[Tracelet] SmartMotionCoordinator: onSpeedStateChange -> isMoving=\(isMoving), action=\(action)")
-        handleAction(action)
+        handleAction(action, trigger: "speed")
         // The override above already switched the engine when the speed flag was
         // the one that was stale; reporting `.none` here would hide that from a
         // caller that reads the result.
@@ -267,30 +229,30 @@ public class TraceletSmartMotionCoordinator {
     /// Called when the user manually forces the pace via changePace().
     public func onManualPaceChange(isMoving: Bool) {
         if let accelAction = coreCoordinator?.onAccelStateChange(isMoving: isMoving) {
-            handleAction(accelAction)
+            handleAction(accelAction, trigger: "manual")
         }
         if let speedAction = coreCoordinator?.onSpeedStateChange(isMoving: isMoving) {
-            handleAction(speedAction)
+            handleAction(speedAction, trigger: "manual")
         }
     }
     
-    private func handleAction(_ action: CoordinatorAction) {
+    private func handleAction(_ action: CoordinatorAction, trigger: String) {
         guard let sdk = sdk else { return }
 
         switch action {
         case .switchToContinuous:
-            recordModeSwitch("CONTINUOUS")
+            recordModeSwitch("CONTINUOUS", trigger: trigger)
             sdk.switchToContinuousForce()
             sdk.motionDetector.onManualPaceChange(true)
 
         case .switchToStationaryGeofences:
-            recordModeSwitch("STATIONARY_GEOFENCES")
+            recordModeSwitch("STATIONARY_GEOFENCES", trigger: trigger)
             sdk.switchToStationaryGeofencesForce()
             sdk.motionDetector.onManualPaceChange(false)
 
         case .switchToStationaryPeriodic:
             let keepsStreaming = sdk.configManager?.getStationaryTrackingMode() == .continuous
-            recordModeSwitch(keepsStreaming ? "STATIONARY_CONTINUOUS" : "STATIONARY_PERIODIC")
+            recordModeSwitch(keepsStreaming ? "STATIONARY_CONTINUOUS" : "STATIONARY_PERIODIC", trigger: trigger)
             sdk.switchToStationaryPeriodicForce()
             sdk.motionDetector.onManualPaceChange(false)
 
@@ -307,10 +269,9 @@ public class TraceletSmartMotionCoordinator {
     /// last — and what the other was doing at the time — is the first question
     /// asked of any "it stopped tracking while I was moving" report, and at the
     /// shipped log levels the answer was not recorded anywhere.
-    private func recordModeSwitch(_ mode: String) {
-        let speedText = resolvedSpeed.map { String(format: "%.2f", $0) } ?? "unknown"
+    private func recordModeSwitch(_ mode: String, trigger: String) {
         TraceletLog.lifecycle(
-            "smart-motion: switching to \(mode) — accelMoving=\(isAccelMoving) "
-                + "speedMoving=\(isSpeedMoving) lastSpeed=\(speedText)m/s")
+            "smart-motion: switching to \(mode) — trigger=\(trigger) accelMoving=\(isAccelMoving) "
+                + "speedMoving=\(isSpeedMoving) \(speedEvidence)")
     }
 }

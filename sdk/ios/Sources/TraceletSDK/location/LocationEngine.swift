@@ -104,6 +104,92 @@ public final class LocationEngine: NSObject, CLLocationManagerDelegate {
     /// cached CLLocation.speed may be stale, 0, or -1.
     public private(set) var lastEffectiveSpeed: Double = 0.0
 
+    struct PaceSample {
+        let location: CLLocation
+        let speed: Double
+        let filterReason: String?
+        let source: String
+        let reason: String
+        var age: TimeInterval { -location.timestamp.timeIntervalSinceNow }
+    }
+
+    // The pace sink also sees distance-filtered fixes; the accepted-location cache can lag behind it.
+    private(set) var lastPaceSample: PaceSample?
+
+    private var previousMotionLocation: CLLocation?
+    private var lastMotionReason: String?
+
+    // Reports must distinguish unavailable evidence from a measured zero.
+    public func getMotionSpeedDiagnostics() -> [String: Any] {
+        guard let sample = lastPaceSample else { return [:] }
+        return [
+            "motionFixAtMs": sample.location.timestamp.timeIntervalSince1970 * 1000,
+            "motionSpeedMps": sample.speed >= 0 && sample.speed.isFinite ? sample.speed as Any : NSNull(),
+            "motionSpeedSource": sample.source,
+            "motionSpeedReason": sample.reason,
+        ]
+    }
+
+    // All acquisition paths share the same evidence gate, independent of stored speed.
+    func feedSpeedMotion(_ location: CLLocation, isStartupFix: Bool = false) {
+        let age = -location.timestamp.timeIntervalSinceNow
+        guard age >= 0, age <= Self.maximumPaceFixAge else { return }
+        let previous = previousMotionLocation
+        // The same cached fix may arrive through more than one request.
+        if let previous, location.timestamp <= previous.timestamp { return }
+        previousMotionLocation = location
+        let raw = location.speed
+        var source = "unknown"
+        var reason = "no_speed"
+        var motionSpeed = -1.0
+        // A reported zero is a measurement, not a missing-speed sentinel.
+        if raw.isFinite, raw >= 0 {
+            let uncertainty = location.speedAccuracy
+            let moving = configManager.getSpeedMovingThreshold()
+            let configuredStationary = configManager.getSpeedStationaryThreshold()
+            let stationary = configuredStationary > 0 ? min(configuredStationary, moving) : moving * 0.65
+            // An uncertainty interval crossing either boundary cannot support that pace vote.
+            if uncertainty.isFinite, uncertainty >= 0,
+               !(raw - uncertainty < moving && raw + uncertainty >= moving),
+               !(raw - uncertainty < stationary && raw + uncertainty >= stationary) {
+                motionSpeed = raw
+                source = "platform"
+                reason = "valid"
+            } else { reason = "speed_uncertainty" }
+        } else if !isStartupFix, let previous {
+            let dt = location.timestamp.timeIntervalSince(previous.timestamp)
+            let accuracy = location.horizontalAccuracy
+            let previousAccuracy = previous.horizontalAccuracy
+            let gate = Double(configManager.getTrackingAccuracyThreshold())
+            // Sub-500ms deltas can turn position noise into false speed.
+            if dt < 0.5 { reason = "short_interval" }
+            else if !accuracy.isFinite || !previousAccuracy.isFinite || accuracy <= 0 || previousAccuracy <= 0
+                || (gate > 0 && (accuracy > gate || previousAccuracy > gate)) {
+                reason = "position_accuracy"
+            } else {
+                let distance = location.distance(from: previous)
+                // Only displacement outside both accuracy radii supports a motion vote.
+                let significantDistance = distance - accuracy - previousAccuracy
+                let implied = Double(configManager.getMaxImpliedSpeed())
+                if !distance.isFinite || significantDistance <= 0 { reason = "within_position_error" }
+                else if implied > 0 && distance / dt > implied { reason = "implied_speed" }
+                else {
+                    motionSpeed = significantDistance / dt
+                    source = "position_delta"
+                    reason = "valid"
+                }
+            }
+        }
+        lastPaceSample = PaceSample(location: location, speed: motionSpeed, filterReason: nil, source: source, reason: reason)
+        // Persist evidence changes without writing one lifecycle log for every fix.
+        if reason != lastMotionReason {
+            TraceletLog.lifecycle("pace evidence: source=\(source) reason=\(reason) motionSpeed=\(motionSpeed) "
+                + "rawSpeed=\(raw) accuracyM=\(location.horizontalAccuracy) fixMs=\(location.timestamp.timeIntervalSince1970 * 1000)")
+            lastMotionReason = reason
+        }
+        speedSink?(motionSpeed)
+    }
+
     /// Optional callback invoked on every accepted location (for geofenceModeHighAccuracy).
     ///
     /// Params: latitude, longitude, horizontalAccuracy (meters). Accuracy feeds
@@ -559,6 +645,8 @@ public final class LocationEngine: NSObject, CLLocationManagerDelegate {
     }
 
     public func stop() {
+        // A new session must not derive speed across the stopped interval.
+        previousMotionLocation = nil
         // Cleared before the isTracking guard on purpose: the startup fix runs
         // while *not* tracking, so a stop() during it returns below without
         // ever reaching this line otherwise (#385). The force-accept slot goes
@@ -947,6 +1035,9 @@ public final class LocationEngine: NSObject, CLLocationManagerDelegate {
     public func destroy() {
         stop()
         lastLocation = nil
+        lastPaceSample = nil
+        previousMotionLocation = nil
+        lastMotionReason = nil
         lastGpsLocation = nil
         oneShots.removeAll()
         stopAllWatchers()
@@ -1730,22 +1821,10 @@ public final class LocationEngine: NSObject, CLLocationManagerDelegate {
         if let last = lastLocation {
             distance = location.distance(from: last)
             let timeDelta = location.timestamp.timeIntervalSince(last.timestamp)
-            computedSpeed = (distance > 0 && timeDelta > 0) ? distance / timeDelta : 0.0
+            // Apply the same 500ms derivation floor to recorded speed and motion evidence.
+            computedSpeed = (distance > 0 && timeDelta >= 0.5) ? distance / timeDelta : 0.0
 
-            // A derived speed is only as good as its time base, and `timeDelta > 0`
-            // is satisfied by one millisecond. A session start where CoreLocation
-            // flushes a cached fix alongside a fresh one divides a real distance by
-            // an almost-zero interval, which produced 10073 m/s from a phone on a
-            // desk — enough to wake the speed motion machine out of STATIONARY,
-            // since speedWakeConfirmCount is 1 by default (#342).
-            //
-            // `maxImpliedSpeed` already encodes what counts as credible movement;
-            // above it this is an artefact, not a measurement. Report *no* speed
-            // rather than a fabricated one. That is not #332 in reverse: this
-            // branch is only reached when the platform supplied no speed at all,
-            // so 0 is the pre-existing meaning of "unknown" rather than a value
-            // invented in place of a real reading. A genuinely moving device has a
-            // Doppler speed and never gets here.
+            // The stored-speed fallback keeps its existing zero sentinel; motion uses its own evidence.
             let maxImplied = Double(configManager.getMaxImpliedSpeed())
             if maxImplied > 0 && computedSpeed > maxImplied {
                 TraceletLog.debug(String(
@@ -1766,16 +1845,8 @@ public final class LocationEngine: NSObject, CLLocationManagerDelegate {
             }
         }
 
-        // Resolve effective speed: platform speed if available, otherwise computed.
-        //
-        // The startup anchor (#385) has no valid time base for the derivation:
-        // `lastLocation` survives stop(), so the first fix of a new session in a
-        // live process would be derived against wherever the *previous* session
-        // ended. A device carried 5 km between two sessions yields ~8 m/s —
-        // inside `maxImpliedSpeed` (80 m/s), so nothing discards it. A Doppler
-        // reading is a real measurement and is kept; the derivation is dropped,
-        // for this one fix only, which is what "no speed" already means here.
-        let effectiveSpeed = (location.speed > 0)
+        // Preserve measured zero; startup anchors must not derive speed across sessions.
+        let effectiveSpeed = (location.speed.isFinite && location.speed >= 0)
             ? location.speed
             : (isStartupFix ? 0.0 : computedSpeed)
 
@@ -1828,28 +1899,8 @@ public final class LocationEngine: NSObject, CLLocationManagerDelegate {
             isMock: mock,
             adaptiveContext: adaptiveCtx
         )
-        // IMPORTANT: Always feed the speed motion state machine, even when the
-        // Rust processor rejects the location for persistence/dispatch. The speed
-        // SM needs every speed reading to correctly transition between
-        // MOVING → SLOWING → STATIONARY. Without this, a stationary device
-        // whose locations are filtered (e.g. same lat/lng, no distance change)
-        // will never transition out of MOVING state.
-        //
-        // `result.effectiveSpeed` is the speed the processor resolved for this
-        // fix whether or not it accepted it — it used to be hardcoded to 0 on
-        // every rejection, which fed the machine a fabricated "stopped" for
-        // most of every drive (#332).
-        //
-        // The anchor keeps the measured-speed-only rule applied above: the
-        // *processor* derives its own speed from its own last accepted fix
-        // (`state.last_latitude`), which stop() does not clear either, so
-        // `result.effectiveSpeed` re-introduces exactly the cross-session
-        // derivation that `effectiveSpeed` just declined. Left alone it would
-        // overturn the pace `start()` committed a few lines before asking for
-        // the anchor — 8 m/s is well above `speedMovingThreshold` (1.5 m/s) —
-        // which is the silent override of a committed pace #344 exists to
-        // prevent (#385).
-        let motionSpeed = isStartupFix ? effectiveSpeed : result.effectiveSpeed
+        // Recorded speed and motion evidence have different quality requirements.
+        let recordedSpeed = isStartupFix ? effectiveSpeed : result.effectiveSpeed
         // Only a *current* fix may tell the pace machine how fast we are going.
         //
         // Core Location delivers a cached fix as soon as updates restart, and
@@ -1870,10 +1921,10 @@ public final class LocationEngine: NSObject, CLLocationManagerDelegate {
                 // report is actually describing.
                 TraceletLog.lifecycle(String(
                     format: "pace: a current fix again after %d stale one(s) — speed=%.2f m/s",
-                    staleFixesSincePace, motionSpeed))
+                    staleFixesSincePace, recordedSpeed))
                 staleFixesSincePace = 0
             }
-            speedSink?(motionSpeed)
+            feedSpeedMotion(location, isStartupFix: isStartupFix)
         } else {
             staleFixesSincePace += 1
             // Once per run of stale fixes, not once per fix: the run is the
@@ -1883,7 +1934,7 @@ public final class LocationEngine: NSObject, CLLocationManagerDelegate {
                     format: "pace: ignoring a %.1fs-old fix's speed (%.2f m/s) — a reading older "
                         + "than %.0fs says nothing about the current pace, and letting it "
                         + "through stood a just-woken session back down",
-                    fixAge, motionSpeed, Self.maximumPaceFixAge))
+                    fixAge, recordedSpeed, Self.maximumPaceFixAge))
             }
         }
 
@@ -1948,12 +1999,8 @@ public final class LocationEngine: NSObject, CLLocationManagerDelegate {
             stateManager.addOdometer(distance: result.odometerDelta)
         }
 
-        // `motionSpeed`, not `result.effectiveSpeed`: this property is read as
-        // the session's current speed, and startSpeedMotionManager() seeds the
-        // machine with it — so an anchor's derived value would reach the
-        // machine one session later through that door even though the sink
-        // above declined it (#385).
-        lastEffectiveSpeed = motionSpeed
+        // Keep startup anchors measured-only in the recorded-location cache too.
+        lastEffectiveSpeed = recordedSpeed
 
         // Persist last periodic coordinates for cross-restart odometer
         if isPeriodicTracking {
@@ -1967,10 +2014,10 @@ public final class LocationEngine: NSObject, CLLocationManagerDelegate {
         }
         stateManager.lastLocationTime = Date().timeIntervalSince1970 * 1000
 
-        // `motionSpeed` is identical to result.effectiveSpeed for every fix but
+        // `recordedSpeed` is identical to result.effectiveSpeed for every fix but
         // the anchor, which reports what was measured rather than what was
         // derived (#385).
-        let locationMap = buildLocationMap(location, speed: motionSpeed, smoothedLat: smoothedLat, smoothedLng: smoothedLng)
+        let locationMap = buildLocationMap(location, speed: recordedSpeed, smoothedLat: smoothedLat, smoothedLng: smoothedLng)
 
         // Fire one-shot callbacks
         fireOneShots(location)

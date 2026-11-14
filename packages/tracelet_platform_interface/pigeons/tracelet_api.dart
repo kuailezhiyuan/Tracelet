@@ -418,6 +418,7 @@ class TlMotionConfig {
     this.shakeThreshold,
     this.stillThreshold,
     this.stillSampleCount,
+    this.enableGpsTremorOverride,
   });
   final int? stopTimeout;
   final int? motionTriggerDelay;
@@ -441,6 +442,8 @@ class TlMotionConfig {
   final int? stationaryPeriodicInterval;
   final TlDesiredAccuracy? stationaryPeriodicAccuracy;
   final int? speedWakeConfirmCount;
+  /// Appended to preserve wire indexes; null keeps native compatibility defaults.
+  final bool? enableGpsTremorOverride;
 }
 
 class TlGeofenceConfig {

@@ -1165,7 +1165,8 @@ class TraceletSdk private constructor(private val context: Context) {
                         "from the last resolved speed, which could only overrule it",
                 )
             } else if (locationEngine.getLastLocation() != null) {
-                speedMotionManager.onLocation(locationEngine.lastEffectiveSpeed)
+                // The accepted fix may already have voted; reuse the freshness and deduplication gates.
+                locationEngine.getLastLocation()?.let { locationEngine.feedSpeedMotion(it) }
             } else {
                 com.ikolvi.tracelet.sdk.util.TraceletLog.lifecycle(
                     "pace: no fix resolved in this process yet — not seeding the machine " +
@@ -1249,7 +1250,8 @@ class TraceletSdk private constructor(private val context: Context) {
                         "from the last resolved speed, which could only overrule it",
                 )
             } else if (locationEngine.getLastLocation() != null) {
-                speedMotionManager.onLocation(locationEngine.lastEffectiveSpeed)
+                // The accepted fix may already have voted; reuse the freshness and deduplication gates.
+                locationEngine.getLastLocation()?.let { locationEngine.feedSpeedMotion(it) }
             } else {
                 com.ikolvi.tracelet.sdk.util.TraceletLog.lifecycle(
                     "pace: no fix resolved in this process yet — not seeding the machine " +

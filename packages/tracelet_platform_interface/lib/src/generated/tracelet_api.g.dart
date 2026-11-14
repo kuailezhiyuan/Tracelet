@@ -1297,6 +1297,7 @@ class TlMotionConfig {
     this.stationaryPeriodicInterval,
     this.stationaryPeriodicAccuracy,
     this.speedWakeConfirmCount,
+    this.enableGpsTremorOverride,
   });
 
   int? stopTimeout;
@@ -1343,6 +1344,9 @@ class TlMotionConfig {
 
   int? speedWakeConfirmCount;
 
+  /// Appended to preserve wire indexes; null keeps native compatibility defaults.
+  bool? enableGpsTremorOverride;
+
   List<Object?> _toList() {
     return <Object?>[
       stopTimeout,
@@ -1367,6 +1371,7 @@ class TlMotionConfig {
       stationaryPeriodicInterval,
       stationaryPeriodicAccuracy,
       speedWakeConfirmCount,
+      enableGpsTremorOverride,
     ];
   }
 
@@ -1400,6 +1405,7 @@ class TlMotionConfig {
       stationaryPeriodicInterval: result[19] as int?,
       stationaryPeriodicAccuracy: result[20] as TlDesiredAccuracy?,
       speedWakeConfirmCount: result[21] as int?,
+      enableGpsTremorOverride: result[22] as bool?,
     );
   }
 
@@ -1451,7 +1457,8 @@ class TlMotionConfig {
           stationaryPeriodicAccuracy,
           other.stationaryPeriodicAccuracy,
         ) &&
-        _deepEquals(speedWakeConfirmCount, other.speedWakeConfirmCount);
+        _deepEquals(speedWakeConfirmCount, other.speedWakeConfirmCount) &&
+        _deepEquals(enableGpsTremorOverride, other.enableGpsTremorOverride);
   }
 
   @override
