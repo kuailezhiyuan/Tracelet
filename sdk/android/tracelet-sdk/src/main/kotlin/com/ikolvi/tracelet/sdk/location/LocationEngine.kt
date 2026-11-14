@@ -1969,7 +1969,7 @@ class LocationEngine(
                 val tuning = locationProcessor?.currentTuning()
                 TraceletLog.debug(
                     "Location filtered by Rust processor: ${result.reason} " +
-                        "(speed=${"%.2f".format(result.effectiveSpeed)} m/s fed to speed motion, " +
+                        "(speed=${"%.2f".format(result.effectiveSpeed)} m/s processor speed, " +
                         "acc=${"%.1f".format(result.accuracy)}m, " +
                         "moved=${"%.1f".format(result.distance)}m vs " +
                         "gate=${"%.1f".format(result.effectiveDistanceFilter)}m, " +

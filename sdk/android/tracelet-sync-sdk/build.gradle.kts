@@ -1,9 +1,8 @@
 plugins {
     id("com.android.library")
-    id("org.jetbrains.kotlin.android")
     id("maven-publish")
     id("signing")
-    id("com.vanniktech.maven.publish.base") version "0.30.0"
+    id("com.vanniktech.maven.publish.base") version "0.37.0"
 }
 
 group = "com.ikolvi"
@@ -104,7 +103,7 @@ afterEvaluate {
     }
 
     mavenPublishing {
-        publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
+        publishToMavenCentral(automaticRelease = true)
     }
 
     signing {

@@ -120,6 +120,27 @@ class LocationServiceSmartBootTest {
     }
 
     @Test
+    fun `native takeover preserves a moving acceleration input with stationary speed`() {
+        config.setConfig(mapOf(
+            "enableGpsTremorOverride" to false,
+            "stationaryTrackingMode" to StationaryTrackingMode.CONTINUOUS.value,
+        ))
+        state.isMoving = true
+        state.speedMotionState = SpeedMotionState.STATIONARY
+        val intent = android.content.Intent(context, LocationService::class.java).apply {
+            action = LocationService.ACTION_START
+            putExtra("boot_start", true)
+        }
+        serviceController.create().withIntent(intent).startCommand(0, 1)
+
+        val coordinator = assertNotNull(LocationService.bootSmartMotionCoordinator)
+        assertTrue(coordinator.isAccelMoving, "restoring speed must not erase the saved walking input")
+        assertFalse(coordinator.isSpeedMoving)
+        assertTrue(state.isMoving)
+        assertFalse(assertNotNull(LocationService.bootLocationEngine).isStationaryContinuous)
+    }
+
+    @Test
     fun `smart native takeover keeps speed moving when accelerometer settles`() {
         config.setConfig(mapOf(
             "enableGpsTremorOverride" to false,

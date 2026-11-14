@@ -941,38 +941,37 @@ class TraceletSdk private constructor(private val context: Context) {
         if (::locationEngine.isInitialized) locationEngine.rebuildProcessor()
 
         if (stateManager.enabled) {
-            val motionMode = configManager.getMotionDetectionMode()
-            if (motionMode == com.ikolvi.tracelet.sdk.model.MotionDetectionMode.SMART || 
-                motionMode == com.ikolvi.tracelet.sdk.model.MotionDetectionMode.SPEED) {
-                logger.info("Resuming tracking with motion detection on ready/takeover")
-                start(isResume = true)
-            } else {
-                // The strategy the app started, not the pace: the killed-state
-                // engine writes PERIODIC into `trackingMode` when it parks a
-                // stationary device, and resuming that as `startPeriodic()` stopped
-                // the foreground service and the motion detector of a session the
-                // app had started continuous (#428).
-                val sessionMode = stateManager.sessionTrackingMode
-                if (sessionMode != stateManager.trackingMode) {
-                    TraceletLog.lifecycle(
-                        "session: resuming the started strategy $sessionMode, not the " +
-                            "stationary pace ${stateManager.trackingMode} the killed-state " +
-                            "engine left behind (#428)"
-                    )
+            // The strategy the app started, not the pace: the killed-state
+            // engine writes PERIODIC into `trackingMode` when it parks a
+            // stationary device, and resuming that as `startPeriodic()` stopped
+            // the foreground service and the motion detector of a session the
+            // app had started continuous (#428).
+            //
+            // In every motion mode. SMART and SPEED used to skip this and always
+            // call start(), so a `startPeriodic()` or `startGeofences()` session
+            // came back continuous — foreground service and all — on the next
+            // ready(), often the periodic job's own background launch (#449).
+            // The CONTINUOUS branch's start() already runs the motion detector.
+            val sessionMode = stateManager.sessionTrackingMode
+            if (sessionMode != stateManager.trackingMode) {
+                TraceletLog.lifecycle(
+                    "session: resuming the started strategy $sessionMode, not the " +
+                        "stationary pace ${stateManager.trackingMode} the killed-state " +
+                        "engine left behind (#428)"
+                )
+            }
+            when (sessionMode) {
+                TrackingMode.CONTINUOUS -> {
+                    logger.info("Resuming continuous tracking on ready/takeover")
+                    start(isResume = true)
                 }
-                when (sessionMode) {
-                    TrackingMode.CONTINUOUS -> {
-                        logger.info("Resuming continuous tracking on ready/takeover")
-                        start(isResume = true)
-                    }
-                    TrackingMode.PERIODIC -> {
-                        logger.info("Resuming periodic tracking on ready/takeover")
-                        startPeriodic()
-                    }
-                    TrackingMode.GEOFENCES -> {
-                        logger.info("Resuming geofence tracking on ready/takeover")
-                        startGeofences(isResume = true)
-                    }
+                TrackingMode.PERIODIC -> {
+                    logger.info("Resuming periodic tracking on ready/takeover")
+                    startPeriodic()
+                }
+                TrackingMode.GEOFENCES -> {
+                    logger.info("Resuming geofence tracking on ready/takeover")
+                    startGeofences(isResume = true)
                 }
             }
         }
@@ -1283,17 +1282,14 @@ class TraceletSdk private constructor(private val context: Context) {
             startMotionDetector()
         }
 
-        if (locationEngine.keepsStationaryStream) {
-            if (stateManager.isMoving) {
-                locationEngine.applyContinuousPace(stationary = false)
-            } else {
-                changePace(false)
-                LocationService.switchToStationaryContinuous(locationEngine, stateManager)
-            }
-        } else if (stateManager.isMoving) {
+        if (stateManager.isMoving) {
             locationEngine.start()
         } else {
             changePace(false)
+            // Fresh stationary starts can deduplicate both inputs without applying Low to the stream.
+            if (locationEngine.keepsStationaryStream) {
+                LocationService.switchToStationaryContinuous(locationEngine, stateManager)
+            }
             // A session that starts stationary runs no stream — that is the
             // point of the branch. A fence the OS cannot resolve is decided
             // *from* that stream (#355), so one already stored at start() would
@@ -1344,7 +1340,7 @@ class TraceletSdk private constructor(private val context: Context) {
             configManager.getMotionDetectionMode() ==
             com.ikolvi.tracelet.sdk.model.MotionDetectionMode.SMART
         ) {
-            smartMotionCoordinator.reconcilePosture()
+            smartMotionCoordinator.reconcilePosture(stationaryScheduleCancelled = isResume)
         }
 
         startHeartbeat()
@@ -2298,6 +2294,9 @@ class TraceletSdk private constructor(private val context: Context) {
             eventType = record.eventType,
             eventPayload = record.eventPayload,
             address = record.address,
+            altitudeAccuracy = record.altitudeAccuracy,
+            speedAccuracy = record.speedAccuracy,
+            headingAccuracy = record.headingAccuracy,
         )
     }
 
@@ -2433,6 +2432,10 @@ class TraceletSdk private constructor(private val context: Context) {
         val speed = (coords["speed"] as? Number)?.toDouble() ?: 0.0
         val heading = (coords["heading"] as? Number)?.toDouble() ?: 0.0
         val altitude = (coords["altitude"] as? Number)?.toDouble() ?: 0.0
+        // #445: stored as given; -1 already means "unknown" in the live map.
+        val altitudeAccuracy = (coords["altitudeAccuracy"] as? Number)?.toDouble()
+        val speedAccuracy = (coords["speedAccuracy"] as? Number)?.toDouble()
+        val headingAccuracy = (coords["headingAccuracy"] as? Number)?.toDouble()
         val isMock = params["mock"] == true || params["is_mock"] == true
         val isMoving = params["is_moving"] == true
         val activityMap = params["activity"] as? Map<*, *>
@@ -2533,7 +2536,7 @@ class TraceletSdk private constructor(private val context: Context) {
         }
 
         return try {
-            val newRowId = db.insertLocation(uuid, lat, lng, acc, speed, heading, altitude, isMock, isMoving, activity, activityConfidence, routeContext, timestamp, eventType, eventPayload, address)
+            val newRowId = db.insertLocation(uuid, lat, lng, acc, speed, heading, altitude, isMock, isMoving, activity, activityConfidence, routeContext, timestamp, eventType, eventPayload, address, altitudeAccuracy, speedAccuracy, headingAccuracy)
             enforceRetentionCaps(db)
             // Notify the sync plugin so it can trigger auto-sync
             (syncProvider as? com.ikolvi.tracelet.sdk.location.LocationDataSink)?.insertLocation(params)

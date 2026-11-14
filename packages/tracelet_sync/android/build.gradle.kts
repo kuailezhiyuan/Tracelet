@@ -2,14 +2,14 @@ group = "com.ikolvi.tracelet_sync"
 version = "3.3.0"
 
 buildscript {
-    val kotlinVersion = "2.3.20"
+    val kotlinVersion = "2.4.21"
     repositories {
         google()
         mavenCentral()
     }
 
     dependencies {
-        classpath("com.android.tools.build:gradle:9.0.1")
+        classpath("com.android.tools.build:gradle:9.5.1")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion")
     }
 }
@@ -89,8 +89,8 @@ tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile::class.java).conf
 }
 
 dependencies {
-    compileOnly("com.ikolvi:tracelet-sdk:3.8.9")
-    implementation("com.ikolvi:tracelet-sync-sdk:3.8.9")
+    compileOnly("com.ikolvi:tracelet-sdk:3.8.10")
+    implementation("com.ikolvi:tracelet-sync-sdk:3.8.10")
     testImplementation("com.ikolvi:tracelet-sdk:3.5.6")
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation("org.mockito:mockito-core:5.0.0")

@@ -1978,7 +1978,7 @@ public final class LocationEngine: NSObject, CLLocationManagerDelegate {
             // identical in a log, and telling them apart is the whole diagnosis.
             TraceletLog.debug(String(
                 format: "[Tracelet] Location filtered by Rust processor: %@ "
-                    + "(speed=%.2f m/s fed to speed motion, acc=%.1fm, "
+                    + "(speed=%.2f m/s processor speed, acc=%.1fm, "
                     + "moved=%.1fm vs gate=%.1fm, anchor=%.0fs, thresholds df=%.1f/acc=%d/spd=%d)",
                 result.reason ?? "unknown", result.effectiveSpeed, result.accuracy,
                 result.distance, result.effectiveDistanceFilter, result.anchorAgeSeconds,
