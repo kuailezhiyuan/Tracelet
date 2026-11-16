@@ -21,7 +21,7 @@ import com.ikolvi.tracelet.sdk.receiver.PeriodicAlarmReceiver
 import com.ikolvi.tracelet.sdk.TraceletBootstrap
 import com.ikolvi.tracelet.sdk.util.BatteryUtils
 import com.ikolvi.tracelet.sdk.wrapper.TraceletLocationPriority
-import com.ikolvi.tracelet.sdk.wrapper.TraceletServices
+import com.ikolvi.tracelet.sdk.wrapper.createLocationClient
 import com.ikolvi.tracelet.sdk.wrapper.TraceletCancellationTokenSource
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.text.SimpleDateFormat
@@ -253,7 +253,7 @@ class PeriodicLocationWorker(
     }
 
     private suspend fun fetchLocation(config: ConfigManager): android.location.Location? {
-        val client = TraceletServices.getInstance(applicationContext).getLocationClient(applicationContext)
+        val client = createLocationClient(applicationContext, config)
         val priority = mapAccuracyToPriority(config.getPeriodicDesiredAccuracy())
         val cts = TraceletCancellationTokenSource()
 

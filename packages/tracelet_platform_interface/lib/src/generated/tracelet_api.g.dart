@@ -663,6 +663,8 @@ class TlAndroidConfig {
     this.scheduleUseAlarmManager,
     this.foregroundService,
     this.releaseWakelockWhenStationary,
+    this.useLocationManager,
+    this.stationaryLocationUpdateInterval,
   });
 
   int? locationUpdateInterval;
@@ -687,6 +689,10 @@ class TlAndroidConfig {
   /// Resolves Issue #162.
   bool? releaseWakelockWhenStationary;
 
+  bool? useLocationManager;
+
+  int? stationaryLocationUpdateInterval;
+
   List<Object?> _toList() {
     return <Object?>[
       locationUpdateInterval,
@@ -699,6 +705,8 @@ class TlAndroidConfig {
       scheduleUseAlarmManager,
       foregroundService,
       releaseWakelockWhenStationary,
+      useLocationManager,
+      stationaryLocationUpdateInterval,
     ];
   }
 
@@ -719,6 +727,8 @@ class TlAndroidConfig {
       scheduleUseAlarmManager: result[7] as bool?,
       foregroundService: result[8] as TlForegroundServiceConfig?,
       releaseWakelockWhenStationary: result[9] as bool?,
+      useLocationManager: result[10] as bool?,
+      stationaryLocationUpdateInterval: result[11] as int?,
     );
   }
 
@@ -749,6 +759,11 @@ class TlAndroidConfig {
         _deepEquals(
           releaseWakelockWhenStationary,
           other.releaseWakelockWhenStationary,
+        ) &&
+        _deepEquals(useLocationManager, other.useLocationManager) &&
+        _deepEquals(
+          stationaryLocationUpdateInterval,
+          other.stationaryLocationUpdateInterval,
         );
   }
 

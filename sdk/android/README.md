@@ -179,6 +179,8 @@ AndroidConfig(
     // Location
     locationUpdateInterval = 1000,          // ms between updates
     fastestLocationUpdateInterval = 500,
+    useLocationManager = false,             // opt into GPS-preferred LocationManager
+    stationaryLocationUpdateInterval = 0,   // continuous stationary interval; 0 inherits normal
     deferTime = 0,
     allowIdenticalLocations = false,
     geofenceModeHighAccuracy = false,

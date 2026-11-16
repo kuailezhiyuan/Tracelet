@@ -235,6 +235,8 @@ class TraceletHostApiImpl(
             put("periodicUseExactAlarms", c.android.periodicUseExactAlarms)
             put("scheduleUseAlarmManager", c.android.scheduleUseAlarmManager)
             put("releaseWakelockWhenStationary", c.android.releaseWakelockWhenStationary)
+            put("useLocationManager", c.android.useLocationManager)
+            put("stationaryLocationUpdateInterval", c.android.stationaryLocationUpdateInterval)
             // Foreground-service fields are nullable end to end: null means the
             // caller never mentioned the field, and ConfigManager.setConfig()
             // skips nulls so the persisted notification settings survive a

@@ -220,6 +220,8 @@ class TlAndroidConfig {
     this.scheduleUseAlarmManager,
     this.foregroundService,
     this.releaseWakelockWhenStationary,
+    this.useLocationManager,
+    this.stationaryLocationUpdateInterval,
   });
 
   final int? locationUpdateInterval;
@@ -235,6 +237,9 @@ class TlAndroidConfig {
   /// Drops the OEM Wakelock when the device enters a fully stationary state.
   /// Resolves Issue #162.
   final bool? releaseWakelockWhenStationary;
+
+  final bool? useLocationManager;
+  final int? stationaryLocationUpdateInterval;
 }
 
 class TlLiveActivityConfig {

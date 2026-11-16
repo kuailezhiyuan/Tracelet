@@ -1799,6 +1799,7 @@ class TraceletSdk private constructor(private val context: Context) {
         // parameters until the app was force-killed (#230).
         val locationKeys = listOf(
             "desiredAccuracy", "distanceFilter", "locationUpdateInterval",
+            "stationaryLocationUpdateInterval",
             "fastestLocationUpdateInterval", "stationaryRadius", "deferTime",
             "disableElasticity", "elasticityMultiplier",
         )

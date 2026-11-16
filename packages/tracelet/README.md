@@ -283,6 +283,42 @@ See the [OEM Compatibility Guide](https://github.com/Ikolvi/Tracelet/blob/main/h
 
 ## Documentation
 
+### Android LocationManager client
+
+Opt into the GPS-preferred native client before the first location request:
+
+```dart
+await tl.Tracelet.ready(tl.Config(
+  android: tl.AndroidConfig(
+    useLocationManager: true,
+    locationUpdateInterval: 1000,
+    fastestLocationUpdateInterval: 1000,
+    stationaryLocationUpdateInterval: 10000,
+  ),
+  motion: tl.MotionConfig(
+    stationaryTrackingMode: tl.StationaryTrackingMode.continuous,
+    stationaryPeriodicAccuracy: tl.DesiredAccuracy.low,
+  ),
+));
+```
+
+`useLocationManager` defaults to `false`, preserving automatic GMS/AOSP selection.
+The selected client is retained for the engine's lifetime; changing this option
+requires an app restart. Native recovery and periodic workers read the persisted
+option without Flutter. Other services, including activity recognition and
+geofencing, keep their existing provider selection.
+
+The client requests GPS and network during continuous tracking. Network fixes
+are suppressed while an accurate GPS fix is fresh (10 seconds, or 30 seconds at
+low priority). Single fixes try GPS first and fall back to network; cached fixes
+prefer fresh accurate GPS, then the newest available fix. Passive requests stay
+passive. This source policy is separate from the Smart motion state machine.
+
+`stationaryLocationUpdateInterval` defaults to `0`, keeping the normal interval.
+It applies only while stationary continuous tracking. Android controls actual
+delivery and GNSS power use; a low quality request does not guarantee a specific
+accuracy or power reduction.
+
 ### Kalman Filter GPS Smoothing
 
 Enable the Extended Kalman Filter to smooth GPS coordinates, eliminate jitter, and produce cleaner tracks:

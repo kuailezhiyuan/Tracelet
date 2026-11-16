@@ -140,8 +140,10 @@ class LocationEngine(
         }
     }
 
-    private val fusedClient: TraceletLocationClient =
-        TraceletServices.getProvider(context).getLocationClient(context)
+    // ready() applies Dart config after constructing the engine.
+    private val fusedClient: TraceletLocationClient by lazy {
+        createLocationClient(context, config)
+    }
 
     @Volatile
     private var trackingCallback: TraceletLocationCallback? = null
@@ -2386,12 +2388,16 @@ class LocationEngine(
      * Cadence is the knob that actually costs power on Android, which is why the
      * ladder reaches for it before it touches accuracy.
      */
-    private fun effectiveUpdateInterval(): Long =
-        (config.getLocationUpdateInterval() * budgetCadenceMultiplier).toLong()
+    private fun effectiveUpdateInterval(stationary: Boolean = isStationaryContinuous): Long {
+        val stationaryInterval = if (stationary) config.getStationaryLocationUpdateInterval() else 0L
+        val interval = if (stationaryInterval > 0) stationaryInterval else config.getLocationUpdateInterval()
+        return (interval * budgetCadenceMultiplier).toLong()
+    }
 
     private fun buildLocationRequest(stationary: Boolean = isStationaryContinuous): TraceletLocationRequest {
         val priority = accuracyToPriority(effectiveDesiredAccuracy(stationary))
         val deferTime = config.getDeferTime().toLong()
+        val interval = effectiveUpdateInterval(stationary)
 
         val isSpeedMode = config.getMotionDetectionMode() == com.ikolvi.tracelet.sdk.model.MotionDetectionMode.SPEED
         // High-accuracy geofence mode needs time-based delivery so a stationary
@@ -2402,9 +2408,10 @@ class LocationEngine(
 
         return TraceletLocationRequest(
             priority = priority,
-            intervalMillis = effectiveUpdateInterval(),
+            intervalMillis = interval,
             minUpdateDistanceMeters = distanceFilter,
-            minUpdateIntervalMillis = config.getFastestLocationUpdateInterval(),
+            minUpdateIntervalMillis = if (stationary && config.getStationaryLocationUpdateInterval() > 0)
+                interval else config.getFastestLocationUpdateInterval(),
             maxUpdateDelayMillis = if (deferTime > 0) deferTime else 0L
         )
     }

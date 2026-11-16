@@ -694,6 +694,8 @@ struct TlAndroidConfig: Hashable {
   /// Drops the OEM Wakelock when the device enters a fully stationary state.
   /// Resolves Issue #162.
   var releaseWakelockWhenStationary: Bool? = nil
+  var useLocationManager: Bool? = nil
+  var stationaryLocationUpdateInterval: Int64? = nil
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -708,6 +710,8 @@ struct TlAndroidConfig: Hashable {
     let scheduleUseAlarmManager: Bool? = nilOrValue(pigeonVar_list[7])
     let foregroundService: TlForegroundServiceConfig? = nilOrValue(pigeonVar_list[8])
     let releaseWakelockWhenStationary: Bool? = nilOrValue(pigeonVar_list[9])
+    let useLocationManager: Bool? = nilOrValue(pigeonVar_list[10])
+    let stationaryLocationUpdateInterval: Int64? = nilOrValue(pigeonVar_list[11])
 
     return TlAndroidConfig(
       locationUpdateInterval: locationUpdateInterval,
@@ -719,7 +723,9 @@ struct TlAndroidConfig: Hashable {
       periodicUseExactAlarms: periodicUseExactAlarms,
       scheduleUseAlarmManager: scheduleUseAlarmManager,
       foregroundService: foregroundService,
-      releaseWakelockWhenStationary: releaseWakelockWhenStationary
+      releaseWakelockWhenStationary: releaseWakelockWhenStationary,
+      useLocationManager: useLocationManager,
+      stationaryLocationUpdateInterval: stationaryLocationUpdateInterval
     )
   }
   func toList() -> [Any?] {
@@ -734,13 +740,15 @@ struct TlAndroidConfig: Hashable {
       scheduleUseAlarmManager,
       foregroundService,
       releaseWakelockWhenStationary,
+      useLocationManager,
+      stationaryLocationUpdateInterval,
     ]
   }
   static func == (lhs: TlAndroidConfig, rhs: TlAndroidConfig) -> Bool {
     if Swift.type(of: lhs) != Swift.type(of: rhs) {
       return false
     }
-    return deepEqualsTraceletApi(lhs.locationUpdateInterval, rhs.locationUpdateInterval) && deepEqualsTraceletApi(lhs.fastestLocationUpdateInterval, rhs.fastestLocationUpdateInterval) && deepEqualsTraceletApi(lhs.deferTime, rhs.deferTime) && deepEqualsTraceletApi(lhs.allowIdenticalLocations, rhs.allowIdenticalLocations) && deepEqualsTraceletApi(lhs.geofenceModeHighAccuracy, rhs.geofenceModeHighAccuracy) && deepEqualsTraceletApi(lhs.periodicUseForegroundService, rhs.periodicUseForegroundService) && deepEqualsTraceletApi(lhs.periodicUseExactAlarms, rhs.periodicUseExactAlarms) && deepEqualsTraceletApi(lhs.scheduleUseAlarmManager, rhs.scheduleUseAlarmManager) && deepEqualsTraceletApi(lhs.foregroundService, rhs.foregroundService) && deepEqualsTraceletApi(lhs.releaseWakelockWhenStationary, rhs.releaseWakelockWhenStationary)
+    return deepEqualsTraceletApi(lhs.locationUpdateInterval, rhs.locationUpdateInterval) && deepEqualsTraceletApi(lhs.fastestLocationUpdateInterval, rhs.fastestLocationUpdateInterval) && deepEqualsTraceletApi(lhs.deferTime, rhs.deferTime) && deepEqualsTraceletApi(lhs.allowIdenticalLocations, rhs.allowIdenticalLocations) && deepEqualsTraceletApi(lhs.geofenceModeHighAccuracy, rhs.geofenceModeHighAccuracy) && deepEqualsTraceletApi(lhs.periodicUseForegroundService, rhs.periodicUseForegroundService) && deepEqualsTraceletApi(lhs.periodicUseExactAlarms, rhs.periodicUseExactAlarms) && deepEqualsTraceletApi(lhs.scheduleUseAlarmManager, rhs.scheduleUseAlarmManager) && deepEqualsTraceletApi(lhs.foregroundService, rhs.foregroundService) && deepEqualsTraceletApi(lhs.releaseWakelockWhenStationary, rhs.releaseWakelockWhenStationary) && deepEqualsTraceletApi(lhs.useLocationManager, rhs.useLocationManager) && deepEqualsTraceletApi(lhs.stationaryLocationUpdateInterval, rhs.stationaryLocationUpdateInterval)
   }
 
   func hash(into hasher: inout Hasher) {
@@ -755,6 +763,8 @@ struct TlAndroidConfig: Hashable {
     deepHashTraceletApi(value: scheduleUseAlarmManager, hasher: &hasher)
     deepHashTraceletApi(value: foregroundService, hasher: &hasher)
     deepHashTraceletApi(value: releaseWakelockWhenStationary, hasher: &hasher)
+    deepHashTraceletApi(value: useLocationManager, hasher: &hasher)
+    deepHashTraceletApi(value: stationaryLocationUpdateInterval, hasher: &hasher)
   }
 }
 

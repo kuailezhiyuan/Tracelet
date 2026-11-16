@@ -100,6 +100,29 @@ class LocationEngineRuntimeProviderOptionsTest {
     }
 
     @Test
+    fun stationaryContinuousIntervalIsExplicitAndRestoresOnMovement() {
+        enableStationaryContinuous()
+        whenever(configManager.getStationaryLocationUpdateInterval()).thenReturn(10_000L)
+        engine.applyContinuousPace(stationary = false)
+        assertEquals(1000L, client.requests.last().intervalMillis)
+        engine.applyContinuousPace(stationary = true)
+        assertEquals(10_000L, client.requests.last().intervalMillis)
+        assertEquals(10_000L, client.requests.last().minUpdateIntervalMillis)
+        engine.applyContinuousPace(stationary = false)
+        assertEquals(1000L, client.requests.last().intervalMillis)
+        assertEquals(500L, client.requests.last().minUpdateIntervalMillis)
+    }
+
+    @Test
+    fun backendSelectionUsesConfigAppliedAfterEngineConstruction() {
+        whenever(configManager.getUseLocationManager()).thenReturn(true)
+        val watch = engine.watchPosition(emptyMap())
+        assertTrue(watch >= 0)
+        assertTrue(client.requests.isEmpty())
+        assertTrue(engine.stopWatchPosition(watch))
+    }
+
+    @Test
     fun nullOptionsRestoreConfiguredProviderValues() {
         engine.start()
         assertTrue(engine.updateLocationProviderOptions(1, 25.0))
