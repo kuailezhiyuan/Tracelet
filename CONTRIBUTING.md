@@ -485,7 +485,7 @@ Git dependencies include the generated Dart bindings and C header. To regenerate
 
 The script runs `flutter pub get` and FRB generation; on macOS it also builds the local iOS XCFramework with `sdk/rust-core/build-ios.sh`. Commit the generated Dart, Rust, and C bindings together. Consumer apps do not run this script inside the Pub cache.
 
-> **Note:** Git-based overrides include the native SDK source (since it's in the same repo), so composite build substitution works. However, for production use, the native SDK must be published to Maven Central / CocoaPods trunk.
+For this fork's iOS Git dependencies, use Swift Package Manager. The root Swift package prefers a locally built `sdk/rust-core/out/TraceletCore.xcframework`; otherwise it downloads the matching prebuilt Core from this fork's versioned GitHub Release and verifies its checksum. Consumer apps do not build the plugin's Rust core or add a CocoaPods SDK override.
 
 ## Golden Rules
 
