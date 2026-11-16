@@ -17,7 +17,8 @@ Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before contributing.
 - Xcode 15+ (for iOS development, macOS only)
 - Rust Toolchain (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
 - Cargo NDK for Android (`cargo install cargo-ndk`)
-- Flutter Rust Bridge Codegen (`cargo install flutter_rust_bridge_codegen`)
+- Flutter Rust Bridge Codegen 2.13.0 (`cargo install flutter_rust_bridge_codegen --version 2.13.0`)
+- Cargo Expand (`cargo install cargo-expand --locked`)
 
 ### Setup
 
@@ -475,6 +476,14 @@ dependency_overrides:
       ref: your-branch
       path: packages/tracelet_platform_interface
 ```
+
+Git dependencies include the generated Dart bindings and C header. To regenerate them from a development checkout, run:
+
+```bash
+./scripts/prepare_flutter_git.sh
+```
+
+The script runs `flutter pub get` and FRB generation; on macOS it also builds the local iOS XCFramework with `sdk/rust-core/build-ios.sh`. Commit the generated Dart, Rust, and C bindings together. Consumer apps do not run this script inside the Pub cache.
 
 > **Note:** Git-based overrides include the native SDK source (since it's in the same repo), so composite build substitution works. However, for production use, the native SDK must be published to Maven Central / CocoaPods trunk.
 

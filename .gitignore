@@ -152,11 +152,10 @@ sdk/rust-core/target
 *.dylib
 *.dll
 *.h
+!/packages/tracelet_ios/ios/tracelet_ios/Sources/tracelet_ios/frb_generated.h
 **/jniLibs/
 sdk/rust-core/out/
 *.zip
-
-packages/tracelet_platform_interface/lib/src/rust/
 
 # Benchmark generated files
 benchmark/benchmark_results.json
