@@ -3,7 +3,7 @@ version = "3.3.0"
 
 def forkSdkVersion = "3.8.10-memolanes-0ba22c19"
 
-allprojects {
+rootProject.allprojects {
     repositories {
         exclusiveContent {
             forRepository {
