@@ -1,10 +1,29 @@
 group = "com.ikolvi.tracelet.flutter"
 version = "3.3.0"
 
-
+def forkSdkVersion = "3.8.10-memolanes-0ba22c19"
 
 allprojects {
     repositories {
+        exclusiveContent {
+            forRepository {
+                ivy {
+                    name = "TraceletFork"
+                    url = uri("https://github.com/kuailezhiyuan/Tracelet/releases/download/memolanes-android-0ba22c19")
+                    patternLayout {
+                        artifact("[artifact]-[revision](-[classifier]).[ext]")
+                        ivy("ivy-[revision].xml")
+                    }
+                    metadataSources {
+                        ivyDescriptor()
+                        gradleMetadata()
+                    }
+                }
+            }
+            filter {
+                includeVersion("com.ikolvi", "tracelet-sdk", forkSdkVersion)
+            }
+        }
         google()
         mavenCentral()
     }
@@ -46,9 +65,11 @@ android {
 
     dependencies {
         // Tracelet SDK — standalone geolocation engine
-        // Resolved from Maven Central when published, substituted with local
-        // module via includeBuild during development.
-        api("com.ikolvi:tracelet-sdk:3.8.10")
+        // The fork release includes its Rust core and runtime dependency metadata.
+        // Local composite builds continue to substitute the source module.
+        api("com.ikolvi:tracelet-sdk:$forkSdkVersion") {
+            version { strictly(forkSdkVersion) }
+        }
 
         // Version floor for Play Services Location (see issue #263).
         //
