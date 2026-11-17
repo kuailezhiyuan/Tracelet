@@ -1518,6 +1518,7 @@ class LocationEngine(
             fusedClient.requestLocationUpdates(request, watchCallback, Looper.getMainLooper())
             watchers[watchId] = watchCallback
         } catch (e: SecurityException) {
+            TraceletLog.error("watchPosition: location updates registration failed (watchId=$watchId)", e)
             return -1
         }
 

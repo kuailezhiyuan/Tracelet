@@ -487,6 +487,16 @@ The script runs `flutter pub get` and FRB generation; on macOS it also builds th
 
 For this fork's iOS Git dependencies, use Swift Package Manager. The root Swift package prefers a locally built `sdk/rust-core/out/TraceletCore.xcframework`; otherwise it downloads the matching prebuilt Core from this fork's versioned GitHub Release and verifies its checksum. Consumer apps do not build the plugin's Rust core or add a CocoaPods SDK override.
 
+For this fork's Android Git dependencies, the Flutter plugin resolves the matching prebuilt Android SDK through Gradle's Ivy repository support. The AAR includes the fork's Rust Core for `arm64-v8a`, `armeabi-v7a`, and `x86_64`; its generated metadata preserves runtime dependencies such as JNA and WorkManager. Consumer apps only override `tracelet_android` alongside the other Tracelet packages.
+
+To rebuild the Android release artifacts from their source commit, configure JDK 21 and the Android SDK/NDK, then run:
+
+```bash
+./scripts/prepare_android_git.sh
+```
+
+The script reuses `sdk/rust-core/build-android.sh` and publishes a local Ivy repository under `sdk/android/tracelet-sdk/build/fork-repository/`. Upload its artifacts and metadata to the versioned `memolanes-android-<sourceSHA8>` GitHub Release; the Flutter plugin pins `3.8.10-memolanes-<sourceSHA8>` from that release. Local composite SDK builds continue to use the source module.
+
 ## Golden Rules
 
 1. **Never copy code from flutter_background_geolocation** — all native code is original

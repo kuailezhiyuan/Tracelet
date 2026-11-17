@@ -1,6 +1,7 @@
 plugins {
     id("com.android.library")
     id("maven-publish")
+    id("ivy-publish")
     id("signing")
     id("com.vanniktech.maven.publish.base") version "0.37.0"
 }
@@ -133,6 +134,16 @@ dependencies {
 afterEvaluate {
     publishing {
         publications {
+            providers.gradleProperty("forkSource").orNull?.let { source ->
+                create<IvyPublication>("forkRelease") {
+                    from(components["release"])
+                    // Realize configurations before Gradle snapshots the Ivy descriptor.
+                    configurations { maybeCreate("default") }
+                    organisation = "com.ikolvi"
+                    module = "tracelet-sdk"
+                    revision = "${project.version}-memolanes-$source"
+                }
+            }
             create<MavenPublication>("release") {
                 from(components["release"])
                 groupId = "com.ikolvi"
@@ -168,6 +179,13 @@ afterEvaluate {
                         developerConnection.set("scm:git:ssh://github.com/Ikolvi/Tracelet.git")
                     }
                 }
+            }
+        }
+
+        repositories {
+            ivy {
+                name = "fork"
+                url = layout.buildDirectory.dir("fork-repository").get().asFile.toURI()
             }
         }
 
